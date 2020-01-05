@@ -18,34 +18,48 @@ struct sample_s {
   uint16_t c5;
 };
 
-// Each chunk is a set of 4 samples.
-// A chunk is 64 bytes
-struct chunk_s {
-  struct sample_s s0, s1, s2, s3;
-};
 
 // A block is the amount we DMA before we interrupt
-// For now it is 4 chunks
-// A block is 64 * 4 = 256 bytes
-// We keep two blocks in memory, so 512B of memory
+// For now it is 16 samples.  Since we are doing a 16-input filter, this is the minimum we can do
+// and guarantee that the filter needs inputs from only 2 buffers.
+// A block is 16*16 = 256 bytes
+// We keep three blocks in memory, so 768B of memory
 // Tagged as volatile because these are written by DMA, read by CPU
 volatile struct adc_block_s {
-  struct chunk_s c0;
-  struct chunk_s c1;
-  struct chunk_s c2;
-  struct chunk_s c3;
-} adc_b0, adc_b1;
+  struct sample_s s0;
+  struct sample_s s1;
+  struct sample_s s2;
+  struct sample_s s3;
+  struct sample_s s4;
+  struct sample_s s5;
+  struct sample_s s6;
+  struct sample_s s7;
+  struct sample_s s8;
+  struct sample_s s9;
+  struct sample_s s10;
+  struct sample_s s11;
+  struct sample_s s12;
+  struct sample_s s13;
+  struct sample_s s14;
+  struct sample_s s15;
+} adc_b0, adc_b1, adc_b2;
 
-// We do 4 multiplies and 4 adds to create the filter.
-// The first multiply is a << 16.
-// These are the coeficients on the other multiplies.
-// These are 16-bit unsigned fraction numbers.  I.e. 65535 == .999, or 1 = .00001525....
-// For now these numbers are random, just to test performance.
-#define	C1	0x8321ul
-#define	C2	0x4321ul
-#define	C3	0x2321ul
+// The filter takes 16 inputs.  It should have 16 coefficients, but we assume
+// the filter is symmetric, so the first and last coeeficient are the same, etc.
+// The floating point values are scaled by 2^16 to make the integer part of the
+// result in the high order 16 bits.  Then scaled by 2^4 because we are taking
+// 12-bit numbers as input and want 16-bit numbers as output
+#define	C_CONV(v) ((uint32_t)((v) * (double)(1<<20)))
+#define	C7	C_CONV(1./3.)
+#define	C6	C_CONV(1./9.)
+#define	C5	C_CONV(1./27.)
+#define	C4	C_CONV(1./81.)
+#define	C3	C_CONV(1./243.)
+#define	C2	C_CONV(1./729.)
+#define	C1	C_CONV(1./2187.)
+#define	C0	C_CONV(1./6561.)
 
-#define	OUTPUTS_PER_BLOCK	(4 * 6)	// 4 chunks, each chunk generates one output on each of 6 channels
+#define	OUTPUTS_PER_BLOCK	(4 * 6)	// 16 samples generates 4 outputs on 6 channels
 #define	HEADER_SIZE		4	// reserve 4 * 16 = 2 * 32 bits for header
 #define	N_OUTPUT_BUFFERS	2
 #define	OUTPUT_BUFFER_SIZE	2048	// in samples, not bytes
@@ -60,23 +74,14 @@ uint16_t *output_pointer;	// not volatile because, except for first init, only u
 int output_counter;
 int current_buffer;
 
-// This macro combines 4 samples from one channel to produce one output sample.
-// Reduce a buffer by calling this 24 times
-#define	ADC_REDUCE(buf, chunk, chan)	(adc_b ## buf.c ## chunk.s0.c ## chan  + \
-                                       (uint16_t)((((uint32_t)adc_b ## buf.c ## chunk.s1.c ## chan * C1) + \
-                                           ((uint32_t)adc_b ## buf.c ## chunk.s2.c ## chan * C2) + \
-                                           ((uint32_t)adc_b ## buf.c ## chunk.s3.c ## chan * C3)) >> 16))
-
-
 #define ADCPIN0 A3		// A3 _must_ be the base pin.  Others are not consecutive.
 #define ADCPIN1 A4
 #define ADCPIN2 A5
 #define ADCPIN3 A6
 #define ADCPIN4 A1
 #define ADCPIN5 A2
-#define NPINS 4
-#define NPINS 4
-#define	N_DESCRIPTORS 1		// This is the number of channels we use.  There are 12, but we don't use them all.
+#define NPINS 8			// XXX QQQQ should be 8 QQQQ XXX
+#define	N_DMA_CHANNELS 1		// This is the number of DMA channels we use.  There are 12, but we don't use them all.
 
 // Interrupt logging stuff
 #define	IL_MAX	16
@@ -90,7 +95,7 @@ uint8_t il_reasons[IL_MAX];
 uint16_t il_overflow;
 uint8_t il_count;
 
-// This structure is define in section 20.10
+// This structure is defined in section 20.10
 typedef struct {
   uint16_t btctrl;
   uint16_t btcnt;
@@ -98,10 +103,15 @@ typedef struct {
   uint32_t dstaddr;
   uint32_t descaddr;
 } dmacdescriptor ;
-volatile dmacdescriptor wrb[N_DESCRIPTORS] __attribute__ ((aligned (16)));	// this is a region in memory where the descriptors will be written back.
-dmacdescriptor descriptor_section[N_DESCRIPTORS] __attribute__ ((aligned (16)));// the source descriptors
+volatile dmacdescriptor wrb[N_DMA_CHANNELS] __attribute__ ((aligned (16)));	// this is a region in memory where the descriptors will be written back.
+dmacdescriptor descriptor_section[N_DMA_CHANNELS] __attribute__ ((aligned (16)));// the source descriptors
 dmacdescriptor descriptor __attribute__ ((aligned (16)));		// a single descriptor used temp
 dmacdescriptor descriptor2 __attribute__ ((aligned (16)));		// a single descriptor used as for the second ADC buffer
+dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descriptor used as for the third ADC buffer
+
+#define	BFD_2	((uint32_t)(descriptor_section) + sizeof (struct adc_block_s))
+#define	BFD_0	((uint32_t)(&descriptor2) + sizeof (struct adc_block_s))
+#define	BFD_1	((uint32_t)(&descriptor3) + sizeof (struct adc_block_s))
 
 void init_buffer() {
   uint32_t t;
@@ -123,6 +133,8 @@ volatile uint32_t cpu_c;
 // All it appears to do is clear the interrupts and set the dmadone variable.
 void DMAC_Handler() {
   int i;
+  uint32_t bf_desc;
+
   // interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
   // These are transfer error, transfer complete, and DMA suspended
   uint8_t active_channel;
@@ -141,61 +153,8 @@ void DMAC_Handler() {
   DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_SUSP;
 
   // which descriptor are we using?
-  if (wrb[0].dstaddr == (uint32_t)(&adc_b0) + sizeof adc_b0) {
-    il_reasons[il_count] |= 0x40;
-    // if DMA is going to b0, then we downsample b1
-    *output_pointer++ = ADC_REDUCE(1, 0, 0);
-    *output_pointer++ = ADC_REDUCE(1, 0, 1);
-    *output_pointer++ = ADC_REDUCE(1, 0, 2);
-    *output_pointer++ = ADC_REDUCE(1, 0, 3);
-    *output_pointer++ = ADC_REDUCE(1, 0, 4);
-    *output_pointer++ = ADC_REDUCE(1, 0, 5);
-    *output_pointer++ = ADC_REDUCE(1, 1, 0);
-    *output_pointer++ = ADC_REDUCE(1, 1, 1);
-    *output_pointer++ = ADC_REDUCE(1, 1, 2);
-    *output_pointer++ = ADC_REDUCE(1, 1, 3);
-    *output_pointer++ = ADC_REDUCE(1, 1, 4);
-    *output_pointer++ = ADC_REDUCE(1, 1, 5);
-    *output_pointer++ = ADC_REDUCE(1, 2, 0);
-    *output_pointer++ = ADC_REDUCE(1, 2, 1);
-    *output_pointer++ = ADC_REDUCE(1, 2, 2);
-    *output_pointer++ = ADC_REDUCE(1, 2, 3);
-    *output_pointer++ = ADC_REDUCE(1, 2, 4);
-    *output_pointer++ = ADC_REDUCE(1, 2, 5);
-    *output_pointer++ = ADC_REDUCE(1, 3, 0);
-    *output_pointer++ = ADC_REDUCE(1, 3, 1);
-    *output_pointer++ = ADC_REDUCE(1, 3, 2);
-    *output_pointer++ = ADC_REDUCE(1, 3, 3);
-    *output_pointer++ = ADC_REDUCE(1, 3, 4);
-    *output_pointer++ = ADC_REDUCE(1, 3, 5);
-  } else {
-    il_reasons[il_count] |= 0x80;
-      // if DMA is going to b1, then we downsample b0
-      *output_pointer++ = ADC_REDUCE(0, 0, 0);
-      *output_pointer++ = ADC_REDUCE(0, 0, 1);
-      *output_pointer++ = ADC_REDUCE(0, 0, 2);
-      *output_pointer++ = ADC_REDUCE(0, 0, 3);
-      *output_pointer++ = ADC_REDUCE(0, 0, 4);
-      *output_pointer++ = ADC_REDUCE(0, 0, 5);
-      *output_pointer++ = ADC_REDUCE(0, 1, 0);
-      *output_pointer++ = ADC_REDUCE(0, 1, 1);
-      *output_pointer++ = ADC_REDUCE(0, 1, 2);
-      *output_pointer++ = ADC_REDUCE(0, 1, 3);
-      *output_pointer++ = ADC_REDUCE(0, 1, 4);
-      *output_pointer++ = ADC_REDUCE(0, 1, 5);
-      *output_pointer++ = ADC_REDUCE(0, 2, 0);
-      *output_pointer++ = ADC_REDUCE(0, 2, 1);
-      *output_pointer++ = ADC_REDUCE(0, 2, 2);
-      *output_pointer++ = ADC_REDUCE(0, 2, 3);
-      *output_pointer++ = ADC_REDUCE(0, 2, 4);
-      *output_pointer++ = ADC_REDUCE(0, 2, 5);
-      *output_pointer++ = ADC_REDUCE(0, 3, 0);
-      *output_pointer++ = ADC_REDUCE(0, 3, 1);
-      *output_pointer++ = ADC_REDUCE(0, 3, 2);
-      *output_pointer++ = ADC_REDUCE(0, 3, 3);
-      *output_pointer++ = ADC_REDUCE(0, 3, 4);
-      *output_pointer++ = ADC_REDUCE(0, 3, 5);
-  }
+  bf_desc = wrb[0].dstaddr;
+#include "reduce.h"
 
 #if 0
   for (i = 0; i < 10; i++) {
@@ -263,10 +222,9 @@ void adc_dma() {
   DMAC->CHINTENSET.reg = DMAC_CHINTENSET_MASK ; // enable all 3 interrupts
   dmadone = 0;
 
-  // set up the first of 2 descriptors pointing to adc_b0
+  // set up the first of 3 descriptors, one for each adc buffer
   // link to second descriptor
   descriptor.descaddr = (uint32_t)&descriptor2;
-  //descriptor.descaddr = 0;
   descriptor.srcaddr = (uint32_t) &ADC->RESULT.reg;
   descriptor.btcnt =  (uint16_t)(sizeof adc_b0) / 2;
   // why is the dstaddr set to beyond the end of the buffer?
@@ -279,14 +237,18 @@ void adc_dma() {
   // Put the descriptor where it goes.  Not sure why we didn't just initialize in place.
   memcpy(&descriptor_section[chnl], &descriptor, sizeof(dmacdescriptor));
 
-  // set up the second of 2 descriptors pointing to adc_b1
-  // link to first descriptor -- creates an infinite loop
-  //descriptor2.descaddr = 0;
-  descriptor2.descaddr = (uint32_t)descriptor_section;
+  // set up the second of 3
+  descriptor2.descaddr = (uint32_t)&descriptor3;
   descriptor2.srcaddr = (uint32_t) &ADC->RESULT.reg;
   descriptor2.btcnt =  (uint16_t)(sizeof adc_b1) / 2;
   descriptor2.dstaddr = (uint32_t)(&adc_b1) + sizeof adc_b1; // end address
   descriptor2.btctrl =  DMAC_BTCTRL_BEATSIZE_HWORD | DMAC_BTCTRL_DSTINC | DMAC_BTCTRL_VALID | DMAC_BTCTRL_BLOCKACT_INT;
+  // third descriptor, back to the first
+  descriptor3.descaddr = (uint32_t)descriptor_section;
+  descriptor3.srcaddr = (uint32_t) &ADC->RESULT.reg;
+  descriptor3.btcnt =  (uint16_t)(sizeof adc_b2) / 2;
+  descriptor3.dstaddr = (uint32_t)(&adc_b2) + sizeof adc_b2; // end address
+  descriptor3.btctrl =  DMAC_BTCTRL_BEATSIZE_HWORD | DMAC_BTCTRL_DSTINC | DMAC_BTCTRL_VALID | DMAC_BTCTRL_BLOCKACT_INT;
 
   // Set up the output buffers
   for (i = 0; i < N_OUTPUT_BUFFERS; i++) {
@@ -340,7 +302,7 @@ void adc_init() {
   ADC->AVGCTRL.reg = 0x00 ;       //no averaging
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
-  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV8 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV4 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
   ADC->CTRLA.bit.ENABLE = 0x01;
   ADCsync();
@@ -423,7 +385,7 @@ void setup() {
   dma_init();
   Serial.println("dma_init complete");
   adc_dma();
-  delay(1000);
+  delay(100);
   il_dump();
   measure("during DMA");
   il_dump();
