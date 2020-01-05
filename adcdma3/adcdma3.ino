@@ -123,7 +123,6 @@ volatile uint32_t cpu_c;
 // All it appears to do is clear the interrupts and set the dmadone variable.
 void DMAC_Handler() {
   int i;
-  char rflag;
   // interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
   // These are transfer error, transfer complete, and DMA suspended
   uint8_t active_channel;
@@ -133,6 +132,7 @@ void DMAC_Handler() {
   active_channel =  DMAC->INTPEND.reg & DMAC_INTPEND_ID_Msk; // get channel number
   DMAC->CHID.reg = DMAC_CHID_ID(active_channel);
   dmadone = DMAC->CHINTFLAG.reg;	// huh?
+
   il_times[il_count] = micros();
   il_reasons[il_count] = (dmadone & 0x7);
 
@@ -141,10 +141,8 @@ void DMAC_Handler() {
   DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_SUSP;
 
   // which descriptor are we using?
-  rflag = 0;
   if (wrb[0].dstaddr == (uint32_t)(&adc_b0) + sizeof adc_b0) {
     il_reasons[il_count] |= 0x40;
-    rflag = 1;
     // if DMA is going to b0, then we downsample b1
     *output_pointer++ = ADC_REDUCE(1, 0, 0);
     *output_pointer++ = ADC_REDUCE(1, 0, 1);
@@ -170,10 +168,8 @@ void DMAC_Handler() {
     *output_pointer++ = ADC_REDUCE(1, 3, 3);
     *output_pointer++ = ADC_REDUCE(1, 3, 4);
     *output_pointer++ = ADC_REDUCE(1, 3, 5);
-  }
-  if (wrb[0].dstaddr == (uint32_t)(&adc_b1) + sizeof adc_b1) {
+  } else {
     il_reasons[il_count] |= 0x80;
-    if (!rflag) {
       // if DMA is going to b1, then we downsample b0
       *output_pointer++ = ADC_REDUCE(0, 0, 0);
       *output_pointer++ = ADC_REDUCE(0, 0, 1);
@@ -199,7 +195,6 @@ void DMAC_Handler() {
       *output_pointer++ = ADC_REDUCE(0, 3, 3);
       *output_pointer++ = ADC_REDUCE(0, 3, 4);
       *output_pointer++ = ADC_REDUCE(0, 3, 5);
-    }
   }
 
 #if 0
@@ -224,7 +219,6 @@ void DMAC_Handler() {
   } else {
     il_count++;
   }
-
   __enable_irq();
 
 }
@@ -353,18 +347,19 @@ void adc_init() {
 }
 
 void il_dump() {
-  int i;
+  int i, local_count;
 
+  local_count = il_count;
   if (il_overflow) {
-    il_count++;
+    local_count++;
   }
   Serial.print("count: ");
-  Serial.println(il_count);
-  if (il_count > IL_MAX) {
-    il_count = IL_MAX;
+  Serial.println(local_count);
+  if (local_count > IL_MAX) {
+    local_count = IL_MAX;
   }
 
-  for (i = 0; i < il_count; i++) {
+  for (i = 0; i < local_count; i++) {
     Serial.print(il_times[i] - il_times[0]);
     Serial.print(": ");
     if (il_reasons[i] & IL_START) {
@@ -398,17 +393,24 @@ void il_dump() {
 void measure(char *name) {
   uint32_t t1, t2, i;
 
+#if 1
   t1 = micros();
+#else
+  t1 = 0;
+#endif
   for (i = 0; i < 1000000; i++) {
     cpu_c += 1;
     cpu_c += 1;
   }
+#if 1
   t2 = micros();
+#else
+  t2 = 1;
+#endif
   Serial.println(name);
   Serial.print("  ");
   Serial.println(t2 - t1);
 }
-
 
 void setup() {
   Serial.begin(9600);
@@ -421,7 +423,7 @@ void setup() {
   dma_init();
   Serial.println("dma_init complete");
   adc_dma();
-  delay(100);
+  delay(1000);
   il_dump();
   measure("during DMA");
   il_dump();
