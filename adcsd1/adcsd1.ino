@@ -1,9 +1,12 @@
 /*
-   This program tests continuous DMA from the ADC into memory buffers.
-
-   The program is built around the assumption we are scanning 6 analog pins.
-   We do some simple digital filtering on the input pins as part of downsampling.
+   This program reads from the ADC as fast as it can.  Currently 171K samples/second.
+   Thise samples are run through a digital filter, reduced 2x in volume, and
+   written to an SD cad.
 */
+
+// include the SD library:
+#include <SPI.h>
+#include <SD.h>
 
 // Each data point is 16 bits.  Each sample is one point from each of 8 channels
 // A sample is 16 bytes
@@ -44,6 +47,23 @@ volatile struct adc_block_s {
   struct sample_s s15;
 } adc_b0, adc_b1, adc_b2;
 
+// Each output block has a header.
+struct header_s {
+  uint32_t time;	// as returned from "micros()"
+  uint8_t  skipped;	// used to track how many buffers we skipped.
+  uint8_t  d1;		// reserved for future use
+  uint8_t  d2;		// reserved for future use
+  uint8_t  d3;		// reserved for future use
+};
+
+/*
+   Notes on skipped buffers:
+   We are attempting to output approximate 130K bytes/second.
+   Since each output buffer is 4K bytes, that is about 33 buffers/second.
+   If we skip more than 256 buffers, we'll lose track of how many we skipped,
+   but that is about 8 seconds, which should never happen.
+*/
+
 // The filter takes 16 inputs.  It should have 16 coefficients, but we assume
 // the filter is symmetric, so the first and last coeeficient are the same, etc.
 // The floating point values are scaled by 2^16 to make the integer part of the
@@ -60,8 +80,8 @@ volatile struct adc_block_s {
 #define	C0	C_CONV(1./6561.)
 
 #define	OUTPUTS_PER_BLOCK	(4 * 6)	// 16 samples generates 4 outputs on 6 channels
-#define	HEADER_SIZE		4	// reserve 4 * 16 = 2 * 32 bits for header
-#define	N_OUTPUT_BUFFERS	2
+#define	HEADER_SIZE		(sizeof (struct header_s) / sizeof (uint16_t))
+#define	N_OUTPUT_BUFFERS	6
 #define	OUTPUT_BUFFER_SIZE	2048	// in samples, not bytes
 
 volatile uint8_t buffer_status[N_OUTPUT_BUFFERS];
@@ -80,7 +100,7 @@ int current_buffer;
 #define ADCPIN3 A6
 #define ADCPIN4 A1
 #define ADCPIN5 A2
-#define NPINS 8			// XXX QQQQ should be 8 QQQQ XXX
+#define NPINS 8
 #define	N_DMA_CHANNELS 1		// This is the number of DMA channels we use.  There are 12, but we don't use them all.
 
 // Interrupt logging stuff
@@ -115,11 +135,28 @@ dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descript
 
 void init_buffer() {
   uint32_t t;
-  buffer_status[current_buffer] = FILLING;
+  struct header_s *h_p;
+
   output_pointer = buffers[current_buffer];
-  // Put some header info into the buffer.  Not sure what.
-  *output_pointer = 0x1234;
+
+  // Set up the buffer header
+  h_p = (struct header_s *)output_pointer;
+  h_p->time = micros();
+
+  // If we are re-using a buffer, bump the skip count, else reset it to zero.
+  if (buffer_status[current_buffer] == FILLING) {
+    if (h_p->skipped < 255)
+      h_p->skipped += 1;
+  } else
+    h_p->skipped = 0;
+
+  h_p->d1 = 0;
+  h_p->d2 = 0;
+  h_p->d3 = 0;
   output_pointer += HEADER_SIZE;
+
+  buffer_status[current_buffer] = FILLING;
+
   // how many more samples can we put in this buffer?
   output_counter = (OUTPUT_BUFFER_SIZE - HEADER_SIZE) / OUTPUTS_PER_BLOCK;
 }
@@ -133,6 +170,7 @@ volatile uint32_t cpu_c;
 // All it appears to do is clear the interrupts and set the dmadone variable.
 void DMAC_Handler() {
   int i;
+  int next_buffer;
   uint32_t bf_desc;
 
   // interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
@@ -156,20 +194,16 @@ void DMAC_Handler() {
   bf_desc = wrb[0].dstaddr;
 #include "reduce.h"
 
-#if 0
-  for (i = 0; i < 10; i++) {
-    cpu_c += 1;
-    cpu_c += 1;
-  }
-#endif
-
   if (--output_counter <= 0) {
-    buffer_status[current_buffer] = FULL;
-    current_buffer++;
-    if (current_buffer >= N_OUTPUT_BUFFERS) {
-      current_buffer = 0;
+    next_buffer = current_buffer + 1;
+    if (next_buffer >= N_OUTPUT_BUFFERS) {
+      next_buffer = 0;
     }
-    // Put code to deal with overrun here.
+
+    if (buffer_status[next_buffer] == EMPTY) {
+      buffer_status[current_buffer] = FULL;
+      current_buffer = next_buffer;
+    }
     init_buffer();
   }
 
@@ -355,20 +389,12 @@ void il_dump() {
 void measure(char *name) {
   uint32_t t1, t2, i;
 
-#if 1
   t1 = micros();
-#else
-  t1 = 0;
-#endif
   for (i = 0; i < 1000000; i++) {
     cpu_c += 1;
     cpu_c += 1;
   }
-#if 1
   t2 = micros();
-#else
-  t2 = 1;
-#endif
   Serial.println(name);
   Serial.print("  ");
   Serial.println(t2 - t1);
@@ -387,10 +413,6 @@ void setup() {
   dma_init();
   Serial.println("dma_init complete");
   adc_dma();
-  delay(100);
-  il_dump();
-  measure("during DMA");
-  il_dump();
 }
 
 void loop() {
