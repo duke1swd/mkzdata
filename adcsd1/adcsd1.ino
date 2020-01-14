@@ -93,6 +93,8 @@ uint16_t buffers[N_OUTPUT_BUFFERS][OUTPUT_BUFFER_SIZE];
 uint16_t *output_pointer;	// not volatile because, except for first init, only used in ISR
 int output_counter;
 int current_buffer;
+int dump_buffer;
+volatile int total_skipped;
 
 #define ADCPIN0 A3		// A3 _must_ be the base pin.  Others are not consecutive.
 #define ADCPIN1 A4
@@ -102,6 +104,19 @@ int current_buffer;
 #define ADCPIN5 A2
 #define NPINS 8
 #define	N_DMA_CHANNELS 1		// This is the number of DMA channels we use.  There are 12, but we don't use them all.
+
+// set up variables using the SD utility library functions:
+Sd2Card card;
+SdVolume volume;
+SdFile root;
+
+const int chipSelect = SDCARD_SS_PIN;
+#define FILE_NAME "data.dat"
+
+File dataFile;
+
+#define	BUFFERS_TO_WRITE	1024
+int buffers_written;
 
 // Interrupt logging stuff
 #define	IL_MAX	16
@@ -145,8 +160,10 @@ void init_buffer() {
 
   // If we are re-using a buffer, bump the skip count, else reset it to zero.
   if (buffer_status[current_buffer] == FILLING) {
-    if (h_p->skipped < 255)
+    if (h_p->skipped < 255) {
       h_p->skipped += 1;
+      total_skipped += 1;
+    }
   } else
     h_p->skipped = 0;
 
@@ -384,6 +401,27 @@ void il_dump() {
   }
 }
 
+// Setup the output path.
+// Basically this means initializing things
+// and opening the output file.
+void output_setup()
+{
+  if (!SD.begin(chipSelect)) {
+    Serial.println("SD initialization failed.");
+    while (1);
+  }
+  Serial.println("SD Card up");
+
+  dataFile = SD.open(FILE_NAME, FILE_WRITE);
+  if (!dataFile) {
+    Serial.println("Cannot open data file for writing.");
+    while (1);
+  }
+  dump_buffer = 0;
+  total_skipped = 0;
+  buffers_written = 0;
+}
+
 // CPU measurement code
 
 void measure(char *name) {
@@ -412,8 +450,34 @@ void setup() {
   Serial.println("adc_init complete");
   dma_init();
   Serial.println("dma_init complete");
+  output_setup();
+  Serial.println("output_setup complete");
   adc_dma();
 }
 
+/*
+   This code dumps the data buffers to disk.
+*/
 void loop() {
+  int n;
+  int tbs;
+  if (buffers_written <= BUFFERS_TO_WRITE && buffer_status[dump_buffer] == FULL) {
+    buffer_status[dump_buffer] = EMPTYING;
+    tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
+    n = dataFile.write((char*)(buffers[dump_buffer]), OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
+    buffer_status[dump_buffer] = EMPTY;
+    if (n != OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) {
+      Serial.print("write returns ");
+      Serial.println(n);
+    }
+    dump_buffer += 1;
+    if (dump_buffer >= N_OUTPUT_BUFFERS)
+      dump_buffer = 0;
+    buffers_written += 1;
+    if (buffers_written == BUFFERS_TO_WRITE) {
+      Serial.println("Done");
+      Serial.print("Total Skips: ");
+      Serial.println(tbs);
+    }
+  }
 }
