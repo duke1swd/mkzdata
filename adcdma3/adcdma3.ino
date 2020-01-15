@@ -73,6 +73,7 @@ uint16_t buffers[N_OUTPUT_BUFFERS][OUTPUT_BUFFER_SIZE];
 uint16_t *output_pointer;	// not volatile because, except for first init, only used in ISR
 int output_counter;
 int current_buffer;
+int reduce_errors;
 
 #define ADCPIN0 A3		// A3 _must_ be the base pin.  Others are not consecutive.
 #define ADCPIN1 A4
@@ -109,9 +110,9 @@ dmacdescriptor descriptor __attribute__ ((aligned (16)));		// a single descripto
 dmacdescriptor descriptor2 __attribute__ ((aligned (16)));		// a single descriptor used as for the second ADC buffer
 dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descriptor used as for the third ADC buffer
 
-#define	BFD_2	((uint32_t)(descriptor_section) + sizeof (struct adc_block_s))
-#define	BFD_0	((uint32_t)(&descriptor2) + sizeof (struct adc_block_s))
-#define	BFD_1	((uint32_t)(&descriptor3) + sizeof (struct adc_block_s))
+#define	BFD_2	((uint32_t)(&adc_b0) + sizeof adc_b0)
+#define	BFD_0	((uint32_t)(&adc_b1) + sizeof adc_b1)
+#define	BFD_1	((uint32_t)(&adc_b2) + sizeof adc_b2)
 
 void init_buffer() {
   uint32_t t;
@@ -155,6 +156,7 @@ void DMAC_Handler() {
   // which descriptor are we using?
   bf_desc = wrb[0].dstaddr;
 #include "reduce.h"
+else reduce_errors++;
 
 #if 0
   for (i = 0; i < 10; i++) {
@@ -258,6 +260,7 @@ void adc_dma() {
     }
   }
   current_buffer = 0;
+  reduce_errors = 0;
   init_buffer();
   Serial.print("init output count: ");
   Serial.println(output_counter);
@@ -302,7 +305,7 @@ void adc_init() {
   ADC->AVGCTRL.reg = 0x00 ;       //no averaging
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
-  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV4 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV8 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
   ADC->CTRLA.bit.ENABLE = 0x01;
   ADCsync();
@@ -391,6 +394,8 @@ void setup() {
   il_dump();
   measure("during DMA");
   il_dump();
+  Serial.print("Reduce Errors: ");
+  Serial.println(reduce_errors);
 }
 
 void loop() {
