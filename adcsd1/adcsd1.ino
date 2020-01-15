@@ -49,7 +49,7 @@ volatile struct adc_block_s {
 
 // Each output block has a header.
 struct header_s {
-  uint32_t time;	// as returned from "micros()"
+  uint32_t stime;	// as returned from "micros()"
   uint8_t  skipped;	// used to track how many buffers we skipped.
   uint8_t  d1;		// reserved for future use
   uint8_t  d2;		// reserved for future use
@@ -115,7 +115,7 @@ const int chipSelect = SDCARD_SS_PIN;
 
 File dataFile;
 
-#define	BUFFERS_TO_WRITE	1024
+#define	BUFFERS_TO_WRITE	3
 int buffers_written;
 
 // Interrupt logging stuff
@@ -156,7 +156,8 @@ void init_buffer() {
 
   // Set up the buffer header
   h_p = (struct header_s *)output_pointer;
-  h_p->time = micros();
+  t = micros();
+  //h_p->stime = t;
 
   // If we are re-using a buffer, bump the skip count, else reset it to zero.
   if (buffer_status[current_buffer] == FILLING) {
@@ -176,6 +177,7 @@ void init_buffer() {
 
   // how many more samples can we put in this buffer?
   output_counter = (OUTPUT_BUFFER_SIZE - HEADER_SIZE) / OUTPUTS_PER_BLOCK;
+
 }
 
 static uint32_t chnl = 0;  // DMA channel
@@ -464,18 +466,22 @@ void loop() {
   if (buffers_written <= BUFFERS_TO_WRITE && buffer_status[dump_buffer] == FULL) {
     buffer_status[dump_buffer] = EMPTYING;
     tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
+#if 0
     n = dataFile.write((char*)(buffers[dump_buffer]), OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
     buffer_status[dump_buffer] = EMPTY;
     if (n != OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) {
       Serial.print("write returns ");
       Serial.println(n);
     }
+#endif
     dump_buffer += 1;
     if (dump_buffer >= N_OUTPUT_BUFFERS)
       dump_buffer = 0;
     buffers_written += 1;
     if (buffers_written == BUFFERS_TO_WRITE) {
       Serial.println("Done");
+      Serial.print("Buffers written: ");
+      Serial.println(buffers_written);
       Serial.print("Total Skips: ");
       Serial.println(tbs);
     }
