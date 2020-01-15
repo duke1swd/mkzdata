@@ -115,7 +115,7 @@ const int chipSelect = SDCARD_SS_PIN;
 
 File dataFile;
 
-#define	BUFFERS_TO_WRITE	3
+#define	BUFFERS_TO_WRITE	300
 int buffers_written;
 
 // Interrupt logging stuff
@@ -163,8 +163,9 @@ void init_buffer() {
   if (buffer_status[current_buffer] == FILLING) {
     if (h_p->skipped < 255) {
       h_p->skipped += 1;
-      total_skipped += 1;
+
     }
+    total_skipped += 1;
   } else
     h_p->skipped = 0;
 
@@ -440,6 +441,9 @@ void measure(char *name) {
   Serial.println(t2 - t1);
 }
 
+uint32_t start_time;
+int errors;
+
 void setup() {
   Serial.begin(9600);
   while (!Serial) ;
@@ -454,7 +458,9 @@ void setup() {
   Serial.println("dma_init complete");
   output_setup();
   Serial.println("output_setup complete");
+  errors = 0;
   adc_dma();
+  start_time = micros();
 }
 
 /*
@@ -463,27 +469,31 @@ void setup() {
 void loop() {
   int n;
   int tbs;
-  if (buffers_written <= BUFFERS_TO_WRITE && buffer_status[dump_buffer] == FULL) {
+  uint32_t end_time;
+
+  if (buffers_written < BUFFERS_TO_WRITE && buffer_status[dump_buffer] == FULL) {
     buffer_status[dump_buffer] = EMPTYING;
     tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
-#if 0
     n = dataFile.write((char*)(buffers[dump_buffer]), OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
     buffer_status[dump_buffer] = EMPTY;
     if (n != OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) {
-      Serial.print("write returns ");
-      Serial.println(n);
+      errors += 1;
     }
-#endif
     dump_buffer += 1;
     if (dump_buffer >= N_OUTPUT_BUFFERS)
       dump_buffer = 0;
     buffers_written += 1;
     if (buffers_written == BUFFERS_TO_WRITE) {
+      end_time = micros();
       Serial.println("Done");
       Serial.print("Buffers written: ");
       Serial.println(buffers_written);
       Serial.print("Total Skips: ");
       Serial.println(tbs);
+      Serial.print("Total Errors: ");
+      Serial.println(errors);
+      Serial.print("Total Time (usec): ");
+      Serial.println(end_time - start_time);
     }
   }
 }
