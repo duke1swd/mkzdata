@@ -117,6 +117,7 @@ File dataFile;
 
 #define	BUFFERS_TO_WRITE	300
 int buffers_written;
+int buffers_filled;
 
 // Interrupt logging stuff
 #define	IL_MAX	16
@@ -215,6 +216,7 @@ void DMAC_Handler() {
 #include "reduce.h"
 
   if (--output_counter <= 0) {
+    buffers_filled++;
     next_buffer = current_buffer + 1;
     if (next_buffer >= N_OUTPUT_BUFFERS) {
       next_buffer = 0;
@@ -423,6 +425,7 @@ void output_setup()
   dump_buffer = 0;
   total_skipped = 0;
   buffers_written = 0;
+  buffers_filled = 0;
 }
 
 // CPU measurement code
@@ -474,7 +477,11 @@ void loop() {
   if (buffers_written < BUFFERS_TO_WRITE && buffer_status[dump_buffer] == FULL) {
     buffer_status[dump_buffer] = EMPTYING;
     tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
+#if 1
+    n = OUTPUT_BUFFER_SIZE * sizeof (uint16_t);
+#else
     n = dataFile.write((char*)(buffers[dump_buffer]), OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
+#endif
     buffer_status[dump_buffer] = EMPTY;
     if (n != OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) {
       errors += 1;
@@ -488,6 +495,8 @@ void loop() {
       Serial.println("Done");
       Serial.print("Buffers written: ");
       Serial.println(buffers_written);
+      Serial.print("Buffers filled: ");
+      Serial.println(buffers_filled);
       Serial.print("Total Skips: ");
       Serial.println(tbs);
       Serial.print("Total Errors: ");
