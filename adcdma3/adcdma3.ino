@@ -42,7 +42,7 @@ volatile struct adc_block_s {
   struct sample_s s13;
   struct sample_s s14;
   struct sample_s s15;
-} adc_b0, adc_b1, adc_b2;
+} adc_b0, adc_b1, adc_b2, adc_bad;
 
 // The filter takes 16 inputs.  It should have 16 coefficients, but we assume
 // the filter is symmetric, so the first and last coeeficient are the same, etc.
@@ -114,10 +114,43 @@ dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descript
 #define	BFD_0	((uint32_t)(&adc_b1) + sizeof adc_b1)
 #define	BFD_1	((uint32_t)(&adc_b2) + sizeof adc_b2)
 
+int bad_buffer;
+int good_buffers;
+void check_buffer(volatile struct adc_block_s *p) {
+  int i;
+  uint8_t *q;
+  if (bad_buffer)
+    return;
+
+  q = (uint8_t *)p;
+  for (i = 0; i < sizeof (struct adc_block_s); i++)
+    if (*q++ == 0xff)
+      goto bad;
+  good_buffers++;
+  return;
+bad:
+  bad_buffer = i + 1;
+  memcpy((uint8_t *)&adc_bad, (uint8_t *)p, sizeof (struct adc_block_s));
+}
+
+void print_buffer(volatile struct adc_block_s *p) {
+  int i;
+  uint16_t *q;
+
+  q = (uint16_t *)p;
+
+  for (i = 0; i < sizeof (struct adc_block_s) / (sizeof (uint16_t)); i++) {
+    Serial.print("  ");
+    Serial.println(q[i], HEX);
+}
+}
+
 void init_buffer() {
   uint32_t t;
   buffer_status[current_buffer] = FILLING;
   output_pointer = buffers[current_buffer];
+  // zap the buffer to 0xff
+  memset((unsigned char *)output_pointer, 0xff, OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
   // Put some header info into the buffer.  Not sure what.
   *output_pointer = 0x1234;
   output_pointer += HEADER_SIZE;
@@ -155,8 +188,14 @@ void DMAC_Handler() {
 
   // which descriptor are we using?
   bf_desc = wrb[0].dstaddr;
+  if (bf_desc == BFD_0)
+    check_buffer(&adc_b0);
+  else if (bf_desc == BFD_1)
+    check_buffer(&adc_b1);
+  else
+    check_buffer(&adc_b2);
 #include "reduce.h"
-else reduce_errors++;
+  else reduce_errors++;
 
 #if 0
   for (i = 0; i < 10; i++) {
@@ -261,6 +300,8 @@ void adc_dma() {
   }
   current_buffer = 0;
   reduce_errors = 0;
+  good_buffers = 0;
+  bad_buffer = 0;
   init_buffer();
   Serial.print("init output count: ");
   Serial.println(output_counter);
@@ -305,7 +346,7 @@ void adc_init() {
   ADC->AVGCTRL.reg = 0x00 ;       //no averaging
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
-  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV8 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV16 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
   ADC->CTRLA.bit.ENABLE = 0x01;
   ADCsync();
@@ -396,6 +437,13 @@ void setup() {
   il_dump();
   Serial.print("Reduce Errors: ");
   Serial.println(reduce_errors);
+  if (bad_buffer) {
+    Serial.print("Bad Buffer = ");
+    Serial.println(bad_buffer - 1);
+    Serial.print("Good Buffers = ");
+    Serial.println(good_buffers);
+    print_buffer(&adc_bad);
+  }
 }
 
 void loop() {
