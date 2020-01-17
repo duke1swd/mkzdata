@@ -20,23 +20,31 @@ File dataFile;
 long startTime;
 long delta;
 
-#define N_BUFFERS 1
-#define N_WORDS (8*1024)
+#define	MIN_WRITE_SIZE	512
+#define	BUFFER_SIZE	(8*1024)
+#define	N_TRAIL		(24 * 1024 / MIN_WRITE_SIZE)
+#define	TEST_TIME	100000ul	// running time in milliseconds == 100 seconds
 
-#define N_TO_WRITE  2048  // count is 0.5KB buffers
 
-unsigned short buffers[N_BUFFERS][N_WORDS];
+char buffer[BUFFER_SIZE];
+uint32_t trailing[N_TRAIL];
 
 void setup() {
   short i, j;
+  int b;
   int n;
+  int ntrail;
   short written;
+  uint32_t write_start;
+  uint32_t write_end;
+  uint32_t write_time;
+  uint32_t write_max;
+  uint32_t multi_write_time;
+  uint32_t multi_write_max;
 
   // Open serial communications and wait for port to open:
   Serial.begin(9600);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
+  while (!Serial) ;
 
   if (!SD.begin(chipSelect)) {
     Serial.println("SD initialization failed.");
@@ -44,45 +52,84 @@ void setup() {
   }
   Serial.println("SD Card up");
 
-  dataFile = SD.open(FILE_NAME, FILE_WRITE);
-  if (!dataFile) {
-    Serial.println("Cannot open data file for writing.");
-    while (1);
+  // Put some non-zero stuff in the buffer
+  for (i = 0; i < BUFFER_SIZE; i++) {
+    buffer[i] = ' ';
   }
 
-  // Put some non-zero stuff in the buffers
-  for (i = 0; i < N_BUFFERS; i++) {
-    buffers[i][0] = i;
-    for (j = 1; j < N_WORDS; j++) {
-      buffers[i][j] = j;
+  for (b = MIN_WRITE_SIZE; b <= BUFFER_SIZE; b *= 2) {
+
+    dataFile = SD.open(FILE_NAME, FILE_WRITE);
+    if (!dataFile) {
+      Serial.println("Cannot open data file for writing.");
+      while (1);
     }
-  }
 
-  startTime = millis();
+    write_max = 0;
+    multi_write_max = 0;
 
-  written = 0;
+    startTime = millis();
 
-  while (1) {
-    for (i = 0; i < N_BUFFERS; i++) {
-      if (written >= N_TO_WRITE) {
-        goto done;
-      }
-      n = dataFile.write((char*)(buffers[i]), 512);
-      if (n != 512) {
+    written = 0;
+    ntrail = 24 * 1024 / b - 1;
+
+    while (millis() - startTime < TEST_TIME) {
+      write_start = micros();
+      n = dataFile.write(buffer, b);
+      write_end = micros();
+      if (n != b) {
         Serial.print("write returns ");
         Serial.println(n);
-        goto done;
+        break;
+      }
+
+      // max write time for one buffer;
+      write_time = write_end - write_start;
+      if (write_time > write_max)
+        write_max = write_time;
+
+      // max write time for 24K worth of buffers
+      j = written % N_TRAIL;
+      trailing[j] = write_start;
+      if (written >= ntrail) {
+	j -= ntrail;
+	if (j < 0)
+	  j += N_TRAIL;
+        multi_write_time = write_end - trailing[j];
+	if (multi_write_time > multi_write_max)
+	  multi_write_max = multi_write_time;
       }
       written++;
     }
+    delta = millis() - startTime;
+
+    dataFile.close();
+    Serial.print("Wrote ");
+    Serial.print(written);
+    Serial.print(" buffers in ");
+    Serial.print(delta);
+    Serial.println(" milliseconds");
+    Serial.print("Buffer size is ");
+    Serial.println(b);
+    Serial.print("Data rate ");
+    Serial.print((double)(b * written) /  ((double)delta ));
+    Serial.println(" KB/sec");
+    Serial.print("Data rate ");
+    Serial.print((double)delta / (double) written);
+    Serial.println(" millseconds/buffer");
+    Serial.print("Max write time: ");
+    Serial.print((double)write_max / 1000.);
+    Serial.println(" milliseconds");
+    Serial.print("N buffers to trail: ");
+    Serial.println(ntrail);
+    Serial.print("Max N writes: ");
+    Serial.print((double)multi_write_max / 1000.);
+    Serial.println(" milliseconds");
+    Serial.print("Guaranteed throughput: ");
+    Serial.print((double)(ntrail * b) * 1000. / (double) multi_write_max);
+    Serial.println(" KB/sec");
+    Serial.println("");
   }
-done:
-  delta = millis() - startTime;
-  Serial.print("Wrote ");
-  Serial.print(written);
-  Serial.print(" buffers in ");
-  Serial.print(delta);
-  Serial.println(" milliseconds");
 }
 
 void loop(void) {
