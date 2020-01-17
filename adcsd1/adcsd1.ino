@@ -1,51 +1,43 @@
 /*
-   This program reads from the ADC as fast as it can.  Currently 171K samples/second.
-   Thise samples are run through a digital filter, reduced 2x in volume, and
-   written to an SD cad.
+   This program reads from the ADC and writes to the SD card.
+
+   Goal is 12.5 samples/sec/channel on 6 channels.
+   We will pack each set of 6 12-bit samples into 9 bytes
 */
+
+#define IL_LOGGING 1
+
+#define	DURATION	(10ul * 1000000ul)	// in microseconds
 
 // include the SD library:
 #include <SPI.h>
 #include <SD.h>
 
-// Each data point is 16 bits.  Each sample is one point from each of 8 channels
+// Each data point is 12 bits.  Each sample is one point from each of 6 channels
 // A sample is 16 bytes
 struct sample_s {
   uint16_t c0;
   uint16_t c1;
   uint16_t c2;
   uint16_t c3;
-  uint16_t null0;
-  uint16_t null1;
   uint16_t c4;
   uint16_t c5;
+  // these are included until we know we don't need them. QQQ
+  uint16_t null0;
+  uint16_t null1;
 };
 
 
-// A block is the amount we DMA before we interrupt
-// For now it is 16 samples.  Since we are doing a 16-input filter, this is the minimum we can do
-// and guarantee that the filter needs inputs from only 2 buffers.
-// A block is 16*16 = 256 bytes
-// We keep three blocks in memory, so 768B of memory
+// An adc_block is the amount we DMA before we interrupt
+// For now it is 14 samples.  Needs tweaking as the buffer size changes,
+// but this works for 512b buffers
 // Tagged as volatile because these are written by DMA, read by CPU
+// Must be a multiple of two
+#define	N_INPUT_SAMPLES	14
+
 volatile struct adc_block_s {
-  struct sample_s s0;
-  struct sample_s s1;
-  struct sample_s s2;
-  struct sample_s s3;
-  struct sample_s s4;
-  struct sample_s s5;
-  struct sample_s s6;
-  struct sample_s s7;
-  struct sample_s s8;
-  struct sample_s s9;
-  struct sample_s s10;
-  struct sample_s s11;
-  struct sample_s s12;
-  struct sample_s s13;
-  struct sample_s s14;
-  struct sample_s s15;
-} adc_b0, adc_b1, adc_b2;
+  struct sample_s s[N_INPUT_SAMPLES];
+} adc_b0, adc_b1;
 
 // Each output block has a header.
 struct header_s {
@@ -58,31 +50,18 @@ struct header_s {
 
 /*
    Notes on skipped buffers:
-   We are attempting to output approximate 130K bytes/second.
-   Since each output buffer is 4K bytes, that is about 33 buffers/second.
+   We are attempting to output approximate 140K bytes/second.
+   Since each output buffer is 512 bytes, that is about 280 buffers/second.
    If we skip more than 256 buffers, we'll lose track of how many we skipped,
-   but that is about 8 seconds, which should never happen.
+   but that is about a second, which should never happen.
 */
 
-// The filter takes 16 inputs.  It should have 16 coefficients, but we assume
-// the filter is symmetric, so the first and last coeeficient are the same, etc.
-// The floating point values are scaled by 2^16 to make the integer part of the
-// result in the high order 16 bits.  Then scaled by 2^4 because we are taking
-// 12-bit numbers as input and want 16-bit numbers as output
-#define	C_CONV(v) ((uint32_t)((v) * (double)(1<<20)))
-#define	C7	C_CONV(1./3.)
-#define	C6	C_CONV(1./9.)
-#define	C5	C_CONV(1./27.)
-#define	C4	C_CONV(1./81.)
-#define	C3	C_CONV(1./243.)
-#define	C2	C_CONV(1./729.)
-#define	C1	C_CONV(1./2187.)
-#define	C0	C_CONV(1./6561.)
 
-#define	OUTPUTS_PER_BLOCK	(4 * 6)	// 16 samples generates 4 outputs on 6 channels
 #define	HEADER_SIZE		(sizeof (struct header_s) / sizeof (uint16_t))
-#define	N_OUTPUT_BUFFERS	6
-#define	OUTPUT_BUFFER_SIZE	2048	// in samples, not bytes
+#define	N_OUTPUT_BUFFERS	8
+#define	OUTPUT_BUFFER_SIZE	256	// in 16-bit words
+// Tweak N_INPUT_SAMPLES to ensure this is an integer
+#define	ADC_BLOCKS_PER_BUFFER	((OUTPUT_BUFFER_SIZE - HEADER_SIZE) * 2 / 9 / N_INPUT_SAMPLES)
 
 volatile uint8_t buffer_status[N_OUTPUT_BUFFERS];
 #define	EMPTY 		0
@@ -115,11 +94,11 @@ const int chipSelect = SDCARD_SS_PIN;
 
 File dataFile;
 
-#define	BUFFERS_TO_WRITE	300
 int buffers_written;
 int buffers_filled;
 
 // Interrupt logging stuff
+#ifdef IL_LOGGING
 #define	IL_MAX	16
 uint32_t il_times[IL_MAX];
 uint8_t il_reasons[IL_MAX];
@@ -130,6 +109,7 @@ uint8_t il_reasons[IL_MAX];
 #define	IL_SUSP		0x4
 uint16_t il_overflow;
 uint8_t il_count;
+#endif
 
 // This structure is defined in section 20.10
 typedef struct {
@@ -143,11 +123,9 @@ volatile dmacdescriptor wrb[N_DMA_CHANNELS] __attribute__ ((aligned (16)));	// t
 dmacdescriptor descriptor_section[N_DMA_CHANNELS] __attribute__ ((aligned (16)));// the source descriptors
 dmacdescriptor descriptor __attribute__ ((aligned (16)));		// a single descriptor used temp
 dmacdescriptor descriptor2 __attribute__ ((aligned (16)));		// a single descriptor used as for the second ADC buffer
-dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descriptor used as for the third ADC buffer
 
-#define	BFD_2	((uint32_t)(descriptor_section) + sizeof (struct adc_block_s))
-#define	BFD_0	((uint32_t)(&descriptor2) + sizeof (struct adc_block_s))
-#define	BFD_1	((uint32_t)(&descriptor3) + sizeof (struct adc_block_s))
+#define	BFD_0	((uint32_t)(descriptor_section) + sizeof (struct adc_block_s))
+#define	BFD_1	((uint32_t)(&descriptor2) + sizeof (struct adc_block_s))
 
 void init_buffer() {
   uint32_t t;
@@ -178,7 +156,7 @@ void init_buffer() {
   buffer_status[current_buffer] = FILLING;
 
   // how many more samples can we put in this buffer?
-  output_counter = (OUTPUT_BUFFER_SIZE - HEADER_SIZE) / OUTPUTS_PER_BLOCK;
+  output_counter = ADC_BLOCKS_PER_BUFFER;
 
 }
 
@@ -191,8 +169,10 @@ volatile uint32_t cpu_c;
 // All it appears to do is clear the interrupts and set the dmadone variable.
 void DMAC_Handler() {
   int i;
+  uint16_t sample;
   int next_buffer;
   uint32_t bf_desc;
+  volatile struct sample_s *i_s_p;
 
   // interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
   // These are transfer error, transfer complete, and DMA suspended
@@ -204,8 +184,10 @@ void DMAC_Handler() {
   DMAC->CHID.reg = DMAC_CHID_ID(active_channel);
   dmadone = DMAC->CHINTFLAG.reg;	// huh?
 
+#ifdef IL_LOGGING
   il_times[il_count] = micros();
   il_reasons[il_count] = (dmadone & 0x7);
+#endif
 
   DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TCMPL; // clear
   DMAC->CHINTFLAG.reg = DMAC_CHINTENCLR_TERR;
@@ -213,7 +195,32 @@ void DMAC_Handler() {
 
   // which descriptor are we using?
   bf_desc = wrb[0].dstaddr;
-#include "reduce.h"
+
+  // This code packs the samples into the buffer.
+  // A total of 6 * 2 = 12 samples (2 per channel) are packed into 9 uint16_t words
+  if (bf_desc == BFD_0)
+    i_s_p = adc_b0.s;
+  else
+    i_s_p = adc_b1.s;
+
+  for (i = 0; i < N_INPUT_SAMPLES / 2; i++) {
+    sample = i_s_p->c0;
+    *output_pointer++ = (i_s_p->c1 | ((sample >> 8) & 0xf));
+    *output_pointer++ = (i_s_p->c2 | ((sample >> 4) & 0xf));
+    *output_pointer++ = (i_s_p->c3 | ((sample     ) & 0xf));
+
+    sample = i_s_p->c4;
+    *output_pointer++ = (i_s_p->c5 | ((sample >> 8) & 0xf));
+    i_s_p++;
+    *output_pointer++ = (i_s_p->c0 | ((sample >> 4) & 0xf));
+    *output_pointer++ = (i_s_p->c1 | ((sample     ) & 0xf));
+
+    sample = i_s_p->c2;
+    *output_pointer++ = (i_s_p->c3 | ((sample >> 8) & 0xf));
+    *output_pointer++ = (i_s_p->c4 | ((sample >> 4) & 0xf));
+    *output_pointer++ = (i_s_p->c5 | ((sample     ) & 0xf));
+    i_s_p++;
+  }
 
   if (--output_counter <= 0) {
     buffers_filled++;
@@ -229,11 +236,13 @@ void DMAC_Handler() {
     init_buffer();
   }
 
+#ifdef IL_LOGGING
   if (il_count >= IL_MAX - 1) {
     il_overflow++;
   } else {
     il_count++;
   }
+#endif
   __enable_irq();
 
 }
@@ -245,9 +254,11 @@ void DMAC_Handler() {
 // an AHB to APB bus bridge.
 // Note that the burst length is hardwired to 1 beat.
 void dma_init() {
+#ifdef IL_LOGGING
   il_overflow = 0;
   il_count = 1;
   il_reasons[0] = IL_START;
+#endif
   // probably on by default
   // The DMAC controller requires both an AHB and an APB clock to be up and running.  See 20.5.3
   PM->AHBMASK.reg |= PM_AHBMASK_DMAC ;
@@ -278,7 +289,7 @@ void adc_dma() {
   DMAC->CHINTENSET.reg = DMAC_CHINTENSET_MASK ; // enable all 3 interrupts
   dmadone = 0;
 
-  // set up the first of 3 descriptors, one for each adc buffer
+  // set up the first of 2 descriptors, one for each adc buffer
   // link to second descriptor
   descriptor.descaddr = (uint32_t)&descriptor2;
   descriptor.srcaddr = (uint32_t) &ADC->RESULT.reg;
@@ -293,18 +304,12 @@ void adc_dma() {
   // Put the descriptor where it goes.  Not sure why we didn't just initialize in place.
   memcpy(&descriptor_section[chnl], &descriptor, sizeof(dmacdescriptor));
 
-  // set up the second of 3
-  descriptor2.descaddr = (uint32_t)&descriptor3;
+  // set up the second descriptor
+  descriptor2.descaddr = (uint32_t)descriptor_section;
   descriptor2.srcaddr = (uint32_t) &ADC->RESULT.reg;
   descriptor2.btcnt =  (uint16_t)(sizeof adc_b1) / 2;
   descriptor2.dstaddr = (uint32_t)(&adc_b1) + sizeof adc_b1; // end address
   descriptor2.btctrl =  DMAC_BTCTRL_BEATSIZE_HWORD | DMAC_BTCTRL_DSTINC | DMAC_BTCTRL_VALID | DMAC_BTCTRL_BLOCKACT_INT;
-  // third descriptor, back to the first
-  descriptor3.descaddr = (uint32_t)descriptor_section;
-  descriptor3.srcaddr = (uint32_t) &ADC->RESULT.reg;
-  descriptor3.btcnt =  (uint16_t)(sizeof adc_b2) / 2;
-  descriptor3.dstaddr = (uint32_t)(&adc_b2) + sizeof adc_b2; // end address
-  descriptor3.btctrl =  DMAC_BTCTRL_BEATSIZE_HWORD | DMAC_BTCTRL_DSTINC | DMAC_BTCTRL_VALID | DMAC_BTCTRL_BLOCKACT_INT;
 
   // Set up the output buffers
   for (i = 0; i < N_OUTPUT_BUFFERS; i++) {
@@ -319,7 +324,9 @@ void adc_dma() {
   Serial.println(output_counter);
 
   // start channel
+#ifdef IL_LOGGING
   il_times[0] = micros();
+#endif
   DMAC->CHID.reg = DMAC_CHID_ID(chnl);
   DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
 }
@@ -358,12 +365,13 @@ void adc_init() {
   ADC->AVGCTRL.reg = 0x00 ;       //no averaging
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
-  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV4 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV32 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
   ADC->CTRLA.bit.ENABLE = 0x01;
   ADCsync();
 }
 
+#ifdef IL_LOGGING
 void il_dump() {
   int i, local_count;
 
@@ -405,6 +413,7 @@ void il_dump() {
     Serial.println(il_overflow);
   }
 }
+#endif
 
 // Setup the output path.
 // Basically this means initializing things
@@ -445,7 +454,9 @@ void measure(char *name) {
 }
 
 uint32_t start_time;
+uint32_t end_time;
 int errors;
+int printed;
 
 void setup() {
   Serial.begin(9600);
@@ -464,17 +475,20 @@ void setup() {
   errors = 0;
   adc_dma();
   start_time = micros();
+  end_time = start_time + DURATION;
+  printed = 0;
 }
 
 /*
    This code dumps the data buffers to disk.
 */
+int tbs;
 void loop() {
   int n;
-  int tbs;
-  uint32_t end_time;
+  uint32_t now;
 
-  if (buffers_written < BUFFERS_TO_WRITE && buffer_status[dump_buffer] == FULL) {
+  now = micros();
+  if (now <= end_time && buffer_status[dump_buffer] == FULL) {
     buffer_status[dump_buffer] = EMPTYING;
     tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
 #if 1
@@ -490,19 +504,22 @@ void loop() {
     if (dump_buffer >= N_OUTPUT_BUFFERS)
       dump_buffer = 0;
     buffers_written += 1;
-    if (buffers_written == BUFFERS_TO_WRITE) {
-      end_time = micros();
-      Serial.println("Done");
-      Serial.print("Buffers written: ");
-      Serial.println(buffers_written);
-      Serial.print("Buffers filled: ");
-      Serial.println(buffers_filled);
-      Serial.print("Total Skips: ");
-      Serial.println(tbs);
-      Serial.print("Total Errors: ");
-      Serial.println(errors);
-      Serial.print("Total Time (usec): ");
-      Serial.println(end_time - start_time);
-    }
+  }
+  if (now >= end_time && !printed) {
+    printed++;
+    Serial.println("Done");
+    Serial.print("Buffers written: ");
+    Serial.println(buffers_written);
+    Serial.print("Buffers filled: ");
+    Serial.println(buffers_filled);
+    Serial.print("Total Skips: ");
+    Serial.println(tbs);
+    Serial.print("Total Errors: ");
+    Serial.println(errors);
+    Serial.print("Total Time (sec): ");
+    Serial.println((double)(now - start_time) / 1000000.);
+    Serial.print("Samples/sec/channel: ");
+    Serial.println((double)(buffers_written * ADC_BLOCKS_PER_BUFFER * N_INPUT_SAMPLES) * 1000000. / ((double)(now - start_time)));
+    il_dump();
   }
 }
