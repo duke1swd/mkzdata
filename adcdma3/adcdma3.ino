@@ -316,9 +316,9 @@ void adc_init() {
   ADC->CTRLA.bit.ENABLE = 0x00;             // Disable ADC
   ADCsync();
 
-  // I think these next two lines set up the input range to be 0 to Vdd volts.
+  // Set the reference to Vdd / 2.  I believe Vdd is 3.3V.
   ADC->REFCTRL.bit.REFSEL = ADC_REFCTRL_REFSEL_INTVCC1_Val;
-  ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_DIV2_Val;
+  ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_1X_Val;
   ADCsync();    //  ref 31.6.16
   // first pin to scan
   itemp = g_APinDescription[ADCPIN0].ulADCChannelNumber << ADC_INPUTCTRL_MUXPOS_Pos;
