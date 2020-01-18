@@ -81,7 +81,7 @@ int reduce_errors;
 #define ADCPIN3 A6
 #define ADCPIN4 A1
 #define ADCPIN5 A2
-#define NPINS 8			// XXX QQQQ should be 8 QQQQ XXX
+#define NPINS 8
 #define	N_DMA_CHANNELS 1		// This is the number of DMA channels we use.  There are 12, but we don't use them all.
 
 // Interrupt logging stuff
@@ -121,9 +121,11 @@ void print_buffer(volatile struct adc_block_s *p) {
   q = (uint16_t *)p;
 
   for (i = 0; i < sizeof (struct adc_block_s) / (sizeof (uint16_t)); i++) {
+    if (i % NPINS == 0)
+      Serial.println("");
     Serial.print("  ");
-    Serial.println(q[i], HEX);
-}
+    Serial.print(q[i]);
+  }
 }
 
 void init_buffer() {
@@ -217,6 +219,9 @@ void dma_init() {
   DMAC->CTRL.reg = DMAC_CTRL_DMAENABLE | DMAC_CTRL_LVLEN(0xf);	// this enables the DMAC and all 4 of its arbitration levels
 }
 
+/*
+ * This routine turns on the ADC and kicks off the DMA of the ADC.
+ */
 void adc_dma() {
   uint32_t temp_CHCTRLB_reg;
   int i, j;
@@ -224,7 +229,7 @@ void adc_dma() {
   DMAC->CHID.reg = DMAC_CHID_ID(chnl);		// hard wired in this code to channel 0.
   DMAC->CHCTRLA.reg &= ~DMAC_CHCTRLA_ENABLE;	// Disable the channel
   DMAC->CHCTRLA.reg = DMAC_CHCTRLA_SWRST;	// Reset the channel.  Return to defaults
-  // not sure why this is necessary, or even harmless.
+  // I think this logic clears the trigger for this channel, while doing nothing to the other channels.
   DMAC->SWTRIGCTRL.reg &= (uint32_t)(~(1 << chnl)); // according to 20.8, writing a 1 will trigger the channel
   // set the CHCTRLB register to:
   //	level 0 (highest?)
@@ -281,6 +286,9 @@ void adc_dma() {
   il_times[0] = micros();
   DMAC->CHID.reg = DMAC_CHID_ID(chnl);
   DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
+
+  // Start the ADC running.
+  adc_start();
 }
 
 // turn off DMA by breaking the infinite loop of dma descriptors.
@@ -307,15 +315,15 @@ void adc_init() {
   analogRead(ADCPIN5);  // do some pin init  pinPeripheral()
   ADC->CTRLA.bit.ENABLE = 0x00;             // Disable ADC
   ADCsync();
-  //ADC->REFCTRL.bit.REFSEL = ADC_REFCTRL_REFSEL_INTVCC0_Val; //  2.2297 V Supply VDDANA
-  //ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_1X_Val;      // Gain select as 1X
-  //ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_DIV2_Val;  // default
+
+  // I think these next two lines set up the input range to be 0 to Vdd volts.
   ADC->REFCTRL.bit.REFSEL = ADC_REFCTRL_REFSEL_INTVCC1_Val;
+  ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_DIV2_Val;
   ADCsync();    //  ref 31.6.16
   // first pin to scan
   itemp = g_APinDescription[ADCPIN0].ulADCChannelNumber << ADC_INPUTCTRL_MUXPOS_Pos;
-  // Scan 4 pins
-  itemp |= ADC_INPUTCTRL_INPUTSCAN(NPINS);
+  // Scan the pins
+  itemp |= ADC_INPUTCTRL_INPUTSCAN(NPINS-1);
   // set the gain
   itemp |= ADC_INPUTCTRL_GAIN_1X;
   // set the INPUTRCTRL register
@@ -329,6 +337,9 @@ void adc_init() {
   // this will give us about 10K samples/sec/channel, assuming 6 channels.
   ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV32 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
+}
+
+void adc_start() {
   ADC->CTRLA.bit.ENABLE = 0x01;
   ADCsync();
 }
@@ -405,10 +416,10 @@ void setup() {
   Serial.println("Hello World");
   measure("idle cpu");
 
-  adc_init();
-  Serial.println("adc_init complete");
   dma_init();
   Serial.println("dma_init complete");
+  adc_init();
+  Serial.println("adc_init complete");
   adc_dma();
   delay(100);
   measure("during DMA");
@@ -419,6 +430,7 @@ void setup() {
     Serial.print("**** Reduce Errors: ");
     Serial.println(reduce_errors);
   }
+  print_buffer(&adc_b0);
 }
 
 void loop() {
