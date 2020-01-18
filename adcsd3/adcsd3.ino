@@ -11,7 +11,7 @@
 
 #define IL_LOGGING 1
 
-#define	DURATION	(10ul * 1000000ul)	// in microseconds
+#define	DURATION	(300ul * 1000000ul)	// in microseconds
 
 // include the SD library:
 #include <SPI.h>
