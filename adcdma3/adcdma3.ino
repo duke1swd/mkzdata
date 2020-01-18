@@ -114,25 +114,6 @@ dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descript
 #define	BFD_0	((uint32_t)(&adc_b1) + sizeof adc_b1)
 #define	BFD_1	((uint32_t)(&adc_b2) + sizeof adc_b2)
 
-int bad_buffer;
-int good_buffers;
-void check_buffer(volatile struct adc_block_s *p) {
-  int i;
-  uint8_t *q;
-  if (bad_buffer)
-    return;
-
-  q = (uint8_t *)p;
-  for (i = 0; i < sizeof (struct adc_block_s); i++)
-    if (*q++ == 0xff)
-      goto bad;
-  good_buffers++;
-  return;
-bad:
-  bad_buffer = i + 1;
-  memcpy((uint8_t *)&adc_bad, (uint8_t *)p, sizeof (struct adc_block_s));
-}
-
 void print_buffer(volatile struct adc_block_s *p) {
   int i;
   uint16_t *q;
@@ -149,8 +130,6 @@ void init_buffer() {
   uint32_t t;
   buffer_status[current_buffer] = FILLING;
   output_pointer = buffers[current_buffer];
-  // zap the buffer to 0xff
-  memset((unsigned char *)output_pointer, 0xff, OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
   // Put some header info into the buffer.  Not sure what.
   *output_pointer = 0x1234;
   output_pointer += HEADER_SIZE;
@@ -188,12 +167,6 @@ void DMAC_Handler() {
 
   // which descriptor are we using?
   bf_desc = wrb[0].dstaddr;
-  if (bf_desc == BFD_0)
-    check_buffer(&adc_b0);
-  else if (bf_desc == BFD_1)
-    check_buffer(&adc_b1);
-  else
-    check_buffer(&adc_b2);
 #include "reduce.h"
   else reduce_errors++;
 
@@ -300,8 +273,6 @@ void adc_dma() {
   }
   current_buffer = 0;
   reduce_errors = 0;
-  good_buffers = 0;
-  bad_buffer = 0;
   init_buffer();
   Serial.print("init output count: ");
   Serial.println(output_counter);
@@ -310,6 +281,13 @@ void adc_dma() {
   il_times[0] = micros();
   DMAC->CHID.reg = DMAC_CHID_ID(chnl);
   DMAC->CHCTRLA.reg |= DMAC_CHCTRLA_ENABLE;
+}
+
+// turn off DMA by breaking the infinite loop of dma descriptors.
+// then wait what I hope is long enough.
+void dma_off() {
+  descriptor3.descaddr = 0;
+  delay(10);
 }
 
 // Not sure this routine is needed.
@@ -346,7 +324,10 @@ void adc_init() {
   ADC->AVGCTRL.reg = 0x00 ;       //no averaging
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
-  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV16 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
+
+  // DIV32 give us a 1.5 MHz ADC_CLK.  Legal max is 2.1 MHz.  After downsampling 4x
+  // this will give us about 10K samples/sec/channel, assuming 6 channels.
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV32 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
   ADC->CTRLA.bit.ENABLE = 0x01;
   ADCsync();
@@ -424,25 +405,19 @@ void setup() {
   Serial.println("Hello World");
   measure("idle cpu");
 
-  analogWriteResolution(10);
-  analogWrite(A0, 64);  // test with DAC
   adc_init();
   Serial.println("adc_init complete");
   dma_init();
   Serial.println("dma_init complete");
   adc_dma();
   delay(100);
-  il_dump();
   measure("during DMA");
+  dma_off();
   il_dump();
-  Serial.print("Reduce Errors: ");
-  Serial.println(reduce_errors);
-  if (bad_buffer) {
-    Serial.print("Bad Buffer = ");
-    Serial.println(bad_buffer - 1);
-    Serial.print("Good Buffers = ");
-    Serial.println(good_buffers);
-    print_buffer(&adc_bad);
+  measure("after DMA");
+  if (reduce_errors) {
+    Serial.print("**** Reduce Errors: ");
+    Serial.println(reduce_errors);
   }
 }
 
