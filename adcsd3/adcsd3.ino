@@ -11,7 +11,7 @@
 
 #define IL_LOGGING 1
 
-#define	DURATION	(300ul * 1000000ul)	// in microseconds
+#define	DURATION	(3ul * 1000000ul)	// in microseconds
 
 // include the SD library:
 #include <SPI.h>
@@ -180,8 +180,8 @@ void print_buffer(volatile struct adc_block_s *p) {
 }
 
 /*
- * Set up the buffer we are about to write to.
- */
+   Set up the buffer we are about to write to.
+*/
 void init_buffer() {
   uint32_t t;
   struct header_s *h_p;
@@ -301,8 +301,8 @@ void dma_init() {
 }
 
 /*
- * This routine turns on the ADC and kicks off the DMA of the ADC.
- */
+   This routine turns on the ADC and kicks off the DMA of the ADC.
+*/
 void adc_dma() {
   uint32_t temp_CHCTRLB_reg;
   int i, j;
@@ -388,8 +388,8 @@ static void   ADCsync() {
 }
 
 /*
- * This code sets up generic clock #4 to run at 8.0MHz
- */
+   This code sets up generic clock #4 to run at 8.0MHz
+*/
 void gclk4() {
   GCLK->GENDIV.reg = GCLK_GENDIV_ID(MY_GENERIC_CLOCK) |	// Generic Clock Generator 4
                      GCLK_GENDIV_DIV(6);		// divide the clock by 6 to generate 8 MHz.
@@ -427,7 +427,7 @@ void adc_init() {
   // first pin to scan
   itemp = g_APinDescription[ADCPIN0].ulADCChannelNumber << ADC_INPUTCTRL_MUXPOS_Pos;
   // Scan the pins
-  itemp |= ADC_INPUTCTRL_INPUTSCAN(NPINS-1);
+  itemp |= ADC_INPUTCTRL_INPUTSCAN(NPINS - 1);
   // set the gain
   itemp |= ADC_INPUTCTRL_GAIN_1X;
   // set the INPUTRCTRL register
@@ -503,9 +503,17 @@ void output_setup()
   }
   Serial.println("SD Card up");
 
+  if (!SD.remove(FILE_NAME)) {
+    Serial.println("could not remove file");
+  }
+
   dataFile = SD.open(FILE_NAME, FILE_WRITE);
   if (!dataFile) {
     Serial.println("Cannot open data file for writing.");
+    while (1);
+  }
+  if (!dataFile.seek(0ul)) {
+    Serial.println("Seek failed.");
     while (1);
   }
   dump_buffer = 0;
@@ -590,7 +598,8 @@ void loop() {
     buffers_written += 1;
   }
   if (now >= end_time && !printed) {
-dma_off();
+    dma_off();
+    dataFile.close();
     printed++;
     Serial.println("Done");
     Serial.print("Buffers written: ");

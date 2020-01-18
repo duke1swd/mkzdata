@@ -66,15 +66,11 @@ void loop() {
     if (channel >= NCHAN) {
       sample++;
       if (sample >= SAMPLES_PER_BLOCK) {
-        if (blocks >= MAX_BLOCKS) {
-          done = 1;
-          return;
-        }
+        if (blocks >= MAX_BLOCKS)
+          goto finished;
         n = dataFile.read((char*)(&block), sizeof block);
-        if (n != sizeof block) {
-          done = 1;
-          return;
-        }
+        if (n != sizeof block)
+          goto finished;
         blocks++;
         sample = 0;
       }
@@ -89,4 +85,9 @@ void loop() {
         Serial.print(", ");
     }
   }
+  return;
+
+finished:
+  Serial.println("Done");
+  done = 1;
 }
