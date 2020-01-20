@@ -220,9 +220,9 @@ static uint32_t chnl = 0;  // DMA channel
 volatile uint32_t dmadone;
 volatile uint32_t cpu_c;
 
-// Apparently this is called on the listed interrupts.
-// I'm unaware of how this happens.
-// All it appears to do is clear the interrupts and set the dmadone variable.
+/*
+ * Override the library definition of the DMAC interrupt ISR
+ */
 void DMAC_Handler() {
   int i;
   int next_buffer;

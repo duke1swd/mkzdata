@@ -12,8 +12,6 @@
 #define CTRL_TC_CHANNEL 0
 #define	CTRL_CC_VAL	24000	// ticks at 12 MHz, so 500 Hz
 
-void TC5_Handler (void) __attribute__ ((weak, alias("Control_Loop")));
-
 #define WAIT_TC16_REGS_SYNC(x) while(x->COUNT16.STATUS.bit.SYNCBUSY);
 
 static inline void resetTC (Tc* TCx)
@@ -28,13 +26,20 @@ static inline void resetTC (Tc* TCx)
   while (TCx->COUNT16.CTRLA.bit.SWRST);
 }
 
+/*
+ * Interrupt priorities:
+ * I believe that DMA is on 0 (high), USB is on 0 (high) and systick is on 2 (low).
+ * So this should put us below DMAC (good), below USB (OK, I guess), and above systick (ok)
+ */
+#define CTRL_TC_NVIC_PRIORITY ((1<<__NVIC_PRIO_BITS) - 1)
+
 void start_control_loop()
 {
   // Configure interrupt request
   NVIC_DisableIRQ(CTRL_TC_IRQn);
   NVIC_ClearPendingIRQ(CTRL_TC_IRQn);
   
-  NVIC_SetPriority(CTRL_TC_IRQn, 0);
+  NVIC_SetPriority (CTRL_TC_IRQn, CTRL_TC_NVIC_PRIORITY);  /* set Priority */
       
   // Enable GCLK for TC4 and TC5 (timer counter input clock)
   GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5));
@@ -68,7 +73,8 @@ static void myLoop();
 extern "C" {
 #endif
 
-void Control_Loop (void)
+// TC5 ISR
+void TC5_Handler (void)
 {
 
     // Clear the interrupt
@@ -132,6 +138,10 @@ void loop() {
 }
 
 
+/*
+ * Warning: this loop function is called from within the TC5 ISR.
+ * Keep it brief!
+ */
 static void myLoop() {
   count_clicks++;
   if (divider++ >= DIVIDE_VAL) {
