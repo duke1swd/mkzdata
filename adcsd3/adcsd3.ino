@@ -11,7 +11,7 @@
 
 #define IL_LOGGING 1
 
-#define	DURATION	(3ul * 1000000ul)	// in microseconds
+#define	DURATION	(30ul * 1000000ul)	// in microseconds
 
 // include the SD library:
 #include <SPI.h>
@@ -549,6 +549,7 @@ uint32_t start_time;
 uint32_t end_time;
 int errors;
 int printed;
+int delta_max;
 
 void setup() {
   Serial.begin(9600);
@@ -569,6 +570,7 @@ void setup() {
   start_time = micros();
   end_time = start_time + DURATION;
   printed = 0;
+  delta_max = 0;
 }
 
 /*
@@ -578,6 +580,7 @@ int tbs;
 void loop() {
   int n;
   uint32_t now;
+  uint32_t delta;
 
   now = micros();
   if (now <= end_time && buffer_status[dump_buffer] == FULL) {
@@ -618,6 +621,9 @@ void loop() {
     Serial.println((double)(buffers_written * ADC_BLOCKS_PER_BUFFER * 4) * 1000000. / ((double)(now - start_time)));
     Serial.print("Output bytes/sec: ");
     Serial.println((double)(buffers_written * OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) * 1000000. / ((double)(now - start_time)));
+    Serial.print("Max Delta: ");
+    Serial.print(delta_max);
+    Serial.println(" usec");
     if (reduce_errors) {
       Serial.print("****    reduce errors: ");
       Serial.println(reduce_errors);
@@ -626,4 +632,7 @@ void loop() {
     il_dump();
 #endif
   }
+  delta = micros() - now;
+  if (delta > delta_max)
+    delta_max = delta;
 }
