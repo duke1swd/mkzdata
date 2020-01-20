@@ -137,7 +137,6 @@ void setup() {
 void loop() {
 }
 
-
 /*
  * Warning: this loop function is called from within the TC5 ISR.
  * Keep it brief!
@@ -152,4 +151,5 @@ static void myLoop() {
     led_val = HIGH;
    digitalWrite(LED_PIN, led_val);
   }
+  delayMicroseconds(200);
 }
