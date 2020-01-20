@@ -448,6 +448,93 @@ void adc_start() {
   ADCsync();
 }
 
+
+/*
+ * Timer Management Code Here
+ * The timer is used to drive the control loop at 500Hz
+ */
+#define CTRL_TC         TC5
+#define CTRL_TC_IRQn    TC5_IRQn
+#define CTRL_TC_TOP     0xFFFF
+#define CTRL_TC_CHANNEL 0
+#define	CTRL_CC_VAL	24000	// ticks at 12 MHz, so 500 Hz
+
+#define WAIT_TC16_REGS_SYNC(x) while(x->COUNT16.STATUS.bit.SYNCBUSY);
+
+static inline void resetTC (Tc* TCx)
+{
+  // Disable TCx
+  TCx->COUNT16.CTRLA.reg &= ~TC_CTRLA_ENABLE;
+  WAIT_TC16_REGS_SYNC(TCx)
+
+  // Reset TCx
+  TCx->COUNT16.CTRLA.reg = TC_CTRLA_SWRST;
+  WAIT_TC16_REGS_SYNC(TCx)
+  while (TCx->COUNT16.CTRLA.bit.SWRST);
+}
+
+/*
+ * Interrupt priorities:
+ * I believe that DMA is on 0 (high), USB is on 0 (high) and systick is on 2 (low).
+ * So this should put us below DMAC (good), below USB (OK, I guess), and above systick (ok)
+ */
+#define CTRL_TC_NVIC_PRIORITY ((1<<__NVIC_PRIO_BITS) - 1)
+
+void start_control_loop()
+{
+  // Configure interrupt request
+  NVIC_DisableIRQ(CTRL_TC_IRQn);
+  NVIC_ClearPendingIRQ(CTRL_TC_IRQn);
+  
+  NVIC_SetPriority (CTRL_TC_IRQn, CTRL_TC_NVIC_PRIORITY);  /* set Priority */
+      
+  // Enable GCLK for TC4 and TC5 (timer counter input clock)
+  GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5));
+  while (GCLK->STATUS.bit.SYNCBUSY);
+
+  resetTC(CTRL_TC);
+
+  uint16_t tmpReg = 0;
+  tmpReg |= TC_CTRLA_MODE_COUNT16;  // Set Timer counter Mode to 16 bits
+  tmpReg |= TC_CTRLA_WAVEGEN_MFRQ;  // Set CTRL_TC mode as match frequency
+  tmpReg |= TC_CTRLA_PRESCALER_DIV4;// Set Prescaler to 4x == 12 MHz
+  CTRL_TC->COUNT16.CTRLA.reg |= tmpReg;
+  WAIT_TC16_REGS_SYNC(CTRL_TC)
+
+  CTRL_TC->COUNT16.CC[CTRL_TC_CHANNEL].reg = (uint16_t) CTRL_CC_VAL;
+  WAIT_TC16_REGS_SYNC(CTRL_TC)
+
+  // Enable the CTRL_TC interrupt request
+  CTRL_TC->COUNT16.INTENSET.bit.MC0 = 1;
+
+  // Enable CTRL_TC
+  CTRL_TC->COUNT16.CTRLA.reg |= TC_CTRLA_ENABLE;
+  WAIT_TC16_REGS_SYNC(CTRL_TC)
+  
+  NVIC_EnableIRQ(CTRL_TC_IRQn);
+}
+
+static void myLoop();
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// TC5 ISR
+void TC5_Handler (void)
+{
+
+    // Clear the interrupt
+    CTRL_TC->COUNT16.INTFLAG.bit.MC0 = 1;
+    myLoop();
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+
+
 #ifdef IL_LOGGING
 void il_dump() {
   int i, local_count;
@@ -551,6 +638,12 @@ int errors;
 int printed;
 int delta_max;
 
+#define DIVIDE_VAL	100
+#define LED_PIN LED_BUILTIN
+int divider;
+int led_val;
+volatile uint32_t count_clicks;
+
 void setup() {
   Serial.begin(9600);
   while (!Serial) ;
@@ -565,6 +658,11 @@ void setup() {
   Serial.println("dma_init complete");
   output_setup();
   Serial.println("output_setup complete");
+  divider = 0;
+  count_clicks = 0;
+  pinMode(LED_PIN, OUTPUT);
+  start_control_loop();
+  Serial.println("control loop started");
   errors = 0;
   adc_dma();
   start_time = micros();
@@ -635,4 +733,22 @@ void loop() {
   delta = micros() - now;
   if (delta > delta_max)
     delta_max = delta;
+}
+
+/*
+ * Warning: this loop function is called from within the TC5 ISR.
+ * Keep it brief!
+ * As dummy load, this routine blinks the LED and consumes 10.1% of the CPU.
+ */
+static void myLoop() {
+  count_clicks++;
+  if (divider++ >= DIVIDE_VAL) {
+   divider = 0;
+   if (led_val == HIGH)
+    led_val = LOW;
+   else
+    led_val = HIGH;
+   digitalWrite(LED_PIN, led_val);
+  }
+  delayMicroseconds(400); /// 200 == 10% of the CPU
 }
