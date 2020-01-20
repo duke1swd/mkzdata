@@ -10,8 +10,9 @@
 #define CTRL_TC_IRQn    TC5_IRQn
 #define CTRL_TC_TOP     0xFFFF
 #define CTRL_TC_CHANNEL 0
+#define	CTRL_CC_VAL	24000	// ticks at 12 MHz, so 500 Hz
 
-void TC5_Handler (void) __attribute__ ((weak, alias("Control Loop")));
+void TC5_Handler (void) __attribute__ ((weak, alias("Control_Loop")));
 
 #define WAIT_TC16_REGS_SYNC(x) while(x->COUNT16.STATUS.bit.SYNCBUSY);
 
@@ -33,7 +34,7 @@ void start_control_loop()
   NVIC_DisableIRQ(CTRL_TC_IRQn);
   NVIC_ClearPendingIRQ(CTRL_TC_IRQn);
   
-  NVIC_SetPriority(TONE_TC_IRQn, 0);
+  NVIC_SetPriority(CTRL_TC_IRQn, 0);
       
   // Enable GCLK for TC4 and TC5 (timer counter input clock)
   GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5));
@@ -43,35 +44,41 @@ void start_control_loop()
 
   uint16_t tmpReg = 0;
   tmpReg |= TC_CTRLA_MODE_COUNT16;  // Set Timer counter Mode to 16 bits
-  tmpReg |= TC_CTRLA_WAVEGEN_MFRQ;  // Set TONE_TC mode as match frequency
-  tmpReg |= TC_CTRLA_PRESCALER_DIV2;// Set Prescaler to 2x
-  TONE_TC->COUNT16.CTRLA.reg |= tmpReg;
-  WAIT_TC16_REGS_SYNC(TONE_TC)
+  tmpReg |= TC_CTRLA_WAVEGEN_MFRQ;  // Set CTRL_TC mode as match frequency
+  tmpReg |= TC_CTRLA_PRESCALER_DIV4;// Set Prescaler to 4x == 12 MHz
+  CTRL_TC->COUNT16.CTRLA.reg |= tmpReg;
+  WAIT_TC16_REGS_SYNC(CTRL_TC)
 
-  TONE_TC->COUNT16.CC[TONE_TC_CHANNEL].reg = (uint16_t) ccValue;
-  WAIT_TC16_REGS_SYNC(TONE_TC)
+  CTRL_TC->COUNT16.CC[CTRL_TC_CHANNEL].reg = (uint16_t) CTRL_CC_VAL;
+  WAIT_TC16_REGS_SYNC(CTRL_TC)
 
-  portToggleRegister = &(PORT->Group[g_APinDescription[outputPin].ulPort].OUTTGL.reg);
-  portClearRegister = &(PORT->Group[g_APinDescription[outputPin].ulPort].OUTCLR.reg);
-  portBitMask = (1ul << g_APinDescription[outputPin].ulPin);
+  // Enable the CTRL_TC interrupt request
+  CTRL_TC->COUNT16.INTENSET.bit.MC0 = 1;
 
-  // Enable the TONE_TC interrupt request
-  TONE_TC->COUNT16.INTENSET.bit.MC0 = 1;
+  // Enable CTRL_TC
+  CTRL_TC->COUNT16.CTRLA.reg |= TC_CTRLA_ENABLE;
+  WAIT_TC16_REGS_SYNC(CTRL_TC)
   
-  if (outputPin != lastOutputPin)
-  {
-    lastOutputPin = outputPin;
-    digitalWrite(outputPin, LOW);
-    pinMode(outputPin, OUTPUT);
-    toneIsActive = true;
-  }
-
-  // Enable TONE_TC
-  TONE_TC->COUNT16.CTRLA.reg |= TC_CTRLA_ENABLE;
-  WAIT_TC16_REGS_SYNC(TONE_TC)
-  
-  NVIC_EnableIRQ(TONE_TC_IRQn);
+  NVIC_EnableIRQ(CTRL_TC_IRQn);
 }
+
+static void myLoop();
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void Control_Loop (void)
+{
+
+    // Clear the interrupt
+    CTRL_TC->COUNT16.INTFLAG.bit.MC0 = 1;
+    myLoop();
+}
+
+#ifdef __cplusplus
+}
+#endif
 
 
 // CPU measurement code
@@ -90,15 +97,49 @@ void measure(char *name) {
   Serial.println(t2 - t1);
 }
 
+#define DIVIDE_VAL	100
+#define LED_PIN LED_BUILTIN
+int divider;
+int led_val;
+volatile uint32_t count_clicks;
 
 void setup() {
+  uint32_t start_t;
+  uint32_t clicks;
+
   Serial.begin(9600);
   while (!Serial) ;
   measure("idle cpu");
-  analogWriteResolution(10);
+
+  divider = 0;
+  count_clicks = 0;
+  pinMode(LED_PIN, OUTPUT);
+  start_control_loop();
+
   delay(100);
   measure("control loop running");
+
+  start_t = micros();
+  clicks = count_clicks;
+  while (micros() - start_t < 10ul * 1000000ul) ;
+  clicks = count_clicks - clicks;
+
+  Serial.print("Interrupts Per Second: ");
+  Serial.println((double)clicks / 10.);
 }
 
 void loop() {
+}
+
+
+static void myLoop() {
+  count_clicks++;
+  if (divider++ >= DIVIDE_VAL) {
+   divider = 0;
+   if (led_val == HIGH)
+    led_val = LOW;
+   else
+    led_val = HIGH;
+   digitalWrite(LED_PIN, led_val);
+  }
 }
