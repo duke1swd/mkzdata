@@ -167,6 +167,12 @@ i_found:
 		errors++;
 	}
 
+	if (filter_size % 4 != 1) {
+		fprintf(stderr, "%s: Warning: Skipping single pass filter.\n", myname);
+		fprintf(stderr, "\tSet filter size (%d) to 1 more than a multiple of 4 to enable\n",
+				filter_size);
+	}
+
 	if (adc_frequency < 1) {
 		fprintf(stderr, "%s: adc frequency (%d) must be positive\n",
 				myname,
@@ -371,11 +377,11 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 	if (index % 2 == 0) {
 		// Index is even
 		for (i = 0; i < n_filters/2; i++) {
-			f = (i + fbase) % n_filters;
+			f = (i+ n_filters - 1 + fbase) % n_filters;
 			filters[f][i+1] = sample;
 			if (debug > 1)
 				printf("\tstoring in f[%d][%d]\n", f, i+1);
-			f = n_filters - 1 - f;
+			f = (n_filters - 2 - i + fbase) % n_filters;
 			filters[f][i+1] = cvalues[i*2+1] *
 				(sample + filters[f][i+1]);
 			if (debug > 1)
@@ -389,7 +395,7 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 
 		return output;
 	} else {
-		f = (index/2 + n_filters/2 - 1) % n_filters;
+		f = (index/2 + n_filters/2 + 1) % n_filters;
 		filters[f][0] = cvalues[0] * sample;
 		if (debug > 1)
 			printf("\tm-s in f[%d][0] with c[0]\n", f);
@@ -446,10 +452,6 @@ doit()
 	}
 
 	simple_filter();
-	if (filter_size % 4 != 1) {
-		printf("Skipping single pass filter.\n");
-		printf("Set filter size (%d) to 1 more than a multiple of 4 to enable\n",
-				filter_size);
-	} else
+	if (filter_size % 4 == 1)
 		single_pass_filter();
 }
