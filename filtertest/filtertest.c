@@ -22,7 +22,7 @@
 #include <math.h>
 
 #define	MAX_SAMPLES	(1000*1000)
-#define PI		3.14159265359
+#define TWOPI		(2. * 3.14159265359)
 #define	FILTER_SIZE_MAX	65
 #define	N_OUTPUTS	3
 
@@ -287,14 +287,16 @@ gen_coef(int n,
 		double windowa0,
 		double windowa1)
 {
+	double v;
 	double sinc;
 	double window;
 
 	if (n == 0)
 		return 1.;
 
-	sinc = sin((double)(2 * n) * PI / (double) foverfs) / (2. * PI * (double) n / (double) foverfs);
-	window = windowa0 + windowa1 * cos((double)(2 * n) * PI / (double)N);
+	v = TWOPI * (double)n / foverfs;
+	sinc = sin(v) / v;
+	window = windowa0 + windowa1 * cos(TWOPI * (double)(n) / (double)N);
 	return sinc * window;
 }
 
@@ -311,12 +313,23 @@ static void gen_coefficients(int *coefficients,
 
 	// Sum up the unnormalized coefficients
 	sum = 0;
-	for (i = 0; i < N; i++)
-		sum += gen_coef((N-1)/2 - i, foverfs, N, windowa0, windowa1);
+	for (i = 0; i <= (N-1)/2; i++)
+		sum += gen_coef(i, foverfs, N, windowa0, windowa1);
+	sum = sum * 2 - gen_coef(0, foverfs, N, windowa0, windowa1);
 
-	for (i = 0; i < N; i++)
-		coefficients[i] = (int)(gen_coef((N-1)/2 - i, foverfs, N, windowa0, windowa1) *
+	// Normalize the sum to 1.0 * gain, then scale and truncate to integer
+	for (i = 0; i <= (N-1)/2; i++)
+		coefficients[i] = (int)(gen_coef(i, foverfs, N, windowa0, windowa1) *
 			gain / sum * scaleone);
+
+	if (debug > 1) {
+		printf("\nCoefficients:\n");
+		for (i = 0; i <= (N-1)/2; i++)
+			printf("\t%2d %.5f %4d\n",
+					i,
+					(double)coefficients[i] / (double)0x10000,
+					coefficients[i]);
+	}
 }
 
 /*
@@ -338,7 +351,7 @@ simple2x(int *input, int *output, int n)
 			if (x >= 0 && x < n)
 				acc += (long)cvalues[j + hw] * (long)input[x];
 		}
-		*output++ = acc;
+		*output++ = acc >> 16;
 	}
 }
 
@@ -393,7 +406,7 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 		for (i = 0; i < n_coeff; i++)
 			output += filters[f][i];
 
-		return output;
+		return output >> 16;
 	} else {
 		f = (index/2 + n_filters/2 + 1) % n_filters;
 		filters[f][0] = cvalues[0] * sample;
@@ -417,7 +430,6 @@ single_pass_filter()
 	o_p = output[SINGLE_PASS_OUTPUT];
 	for (i = 0; i < sample_size; i++) {
 		val = single_pass_stage(first_stage_filters, i, samples[i]);
-		/*xxx*/val = -1;
 		if (val >= 0) {
 			val = single_pass_stage(second_stage_filters, i/2, val);
 			if (val >= 0)
@@ -427,13 +439,44 @@ single_pass_filter()
 }
 
 /*
+ * Compare two filter outputs.  Complain if they are different.
+ */
+static void
+compare(int f1, int f2)
+{
+	int i;
+	int first;
+	int count;
+
+	first = 1;
+	count = 0;
+	for (i = 0; i < sample_size/4; i++)
+		if (output[f1][i] != output[f2][i]) {
+			count++;
+			if (first) 
+				printf("Filters %d and %d differ\n", f1, f2);
+
+			if (first || verbose) 
+				printf("\tsample %d, (%d != %d)\n",
+					i,
+					output[f1][i],
+					output[f2][i]);
+			first = 0;
+		}
+	if (count == 0)
+		printf("Filters %d and %d match\n", f1, f2);
+	else
+		printf("\t%d of %d samples do not match\n", count, sample_size/4);
+}
+
+/*
  * This is the main execution flow.
  */
 static void
 doit()
 {
 	// Create the filter coefficients
-	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, 4.);
+	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, 1.);
 
 	// Get the input data.
 	switch (input_type) {
@@ -454,4 +497,6 @@ doit()
 	simple_filter();
 	if (filter_size % 4 == 1)
 		single_pass_filter();
+
+	compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
 }
