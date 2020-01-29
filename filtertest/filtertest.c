@@ -395,11 +395,11 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 	if (index % 2 == 0) {
 		// Index is even
 		for (i = 0; i < n_filters/2; i++) {
-			f = (i+ n_filters - 1 + fbase) % n_filters;
+			f = (i + fbase) % n_filters;
 			filters[f][i+1] = sample;
 			if (debug > 1)
 				printf("\t%sstoring in f[%d][%d]\n", prefix, f, i+1);
-			f = (n_filters - 2 - i + fbase) % n_filters;
+			f = (n_filters  - 1 - i + fbase) % n_filters;
 			filters[f][i+1] = cvalues[i*2+1] *
 				(sample + filters[f][i+1]);
 			if (debug > 1)
@@ -413,7 +413,7 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 
 		return output >> 16;
 	} else {
-		f = (fbase + n_filters/2) % n_filters;
+		f = fbase;
 		filters[f][0] = cvalues[0] * sample;
 		if (debug > 1)
 			printf("\t%sm-s in f[%d][0] with c[0]\n", prefix, f);
@@ -427,7 +427,6 @@ single_pass_filter()
 	int i;
 	int val;
 	int *o_p;
-	/*xxx*/int counts = 0;
 
 	if (verbose) {
 		printf("Running single pass filter\n");
@@ -442,14 +441,12 @@ single_pass_filter()
 	for (i = 0; i < sample_size; i++) {
 		val = single_pass_stage(first_stage_filters, i+1, samples[i]);
 		if (i % 2 == 1) {
-			val = single_pass_stage(second_stage_filters, i/2+2, val);
+			val = single_pass_stage(second_stage_filters, (i-1)/2, val);
 			if (i % 4 == 1 && i >= 3*(filter_size-2)) {
 				*o_p++ = val;
-				/*xxx*/counts++;
 			}
 		}
 	}
-	/*xxx*/printf("spf generates %d outputs\n", counts);
 }
 
 /*
