@@ -338,19 +338,19 @@ static void gen_coefficients(int *coefficients,
 static void
 simple2x(int *input, int *output, int n)
 {
-	int i, j, x;
+	int i, j;
 	int hw;
 	long acc;
 
 	hw = (filter_size - 1) / 2;
+	if (debug > 1) 
+		printf("\tfiltering %d samples with half-width %d\n",
+				n, hw);
 
-	for (i = 0; i < n; i += 2) {
+	for (i = hw; i < n - hw; i += 2) {
 		acc = 0;
-		for (j = -hw; j <= hw; j++) {
-			x = i + j;
-			if (x >= 0 && x < n)
-				acc += (long)cvalues[j + hw] * (long)input[x];
-		}
+		for (j = -hw; j <= hw; j++)
+			acc += (long)cvalues[j < 0? -j: j] * (long)input[i + j];
 		*output++ = acc >> 16;
 	}
 }
@@ -365,7 +365,7 @@ simple_filter()
 		fflush(stdout);
 	}
 	simple2x(samples, halfsamp, sample_size);
-	simple2x(halfsamp, output[SIMPLE_FILTER_OUTPUT], sample_size/2);
+	simple2x(halfsamp, output[SIMPLE_FILTER_OUTPUT], (sample_size - filter_size)/2 + 1);
 }
 
 static int
@@ -378,14 +378,19 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 	int fbase;
 	int n_filters = (filter_size-1)/2;
 	int n_coeff = (filter_size+3)/4;
+	char *prefix;
 
-	if (index == 0 && debug > 1)
+	if (index == 1 && debug > 1)
 		printf("n_filters = %d, n_coeff = %d\n", n_filters, n_coeff);
 
 	// fbase rotates amongst the filters
 	fbase = (index/2) % n_filters;
-	if (debug > 1)
-		printf("index = %d, fbase = %d\n", index, fbase);
+	if (debug > 1) {
+		prefix = "";
+		if (filters == second_stage_filters)
+			prefix = "\t";
+		printf("%sindex = %d, fbase = %d\n", prefix, index, fbase);
+	}
 
 	if (index % 2 == 0) {
 		// Index is even
@@ -393,25 +398,25 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 			f = (i+ n_filters - 1 + fbase) % n_filters;
 			filters[f][i+1] = sample;
 			if (debug > 1)
-				printf("\tstoring in f[%d][%d]\n", f, i+1);
+				printf("\t%sstoring in f[%d][%d]\n", prefix, f, i+1);
 			f = (n_filters - 2 - i + fbase) % n_filters;
 			filters[f][i+1] = cvalues[i*2+1] *
 				(sample + filters[f][i+1]);
 			if (debug > 1)
-				printf("\ta-m-s in f[%d][%d] with c[%d]\n", f, i+1, i*2+1);
+				printf("\t%sa-m-s in f[%d][%d] with c[%d]\n", prefix, f, i+1, i*2+1);
 		}
 		output = 0;
-		if (debug > 1)
-			printf("\toutput from f[%d]\n", f);
 		for (i = 0; i < n_coeff; i++)
 			output += filters[f][i];
+		if (debug > 1)
+			printf("\t%soutput of %d from f[%d]\n", prefix, output >> 16, f);
 
 		return output >> 16;
 	} else {
-		f = (index/2 + n_filters/2 + 1) % n_filters;
+		f = (fbase + n_filters/2) % n_filters;
 		filters[f][0] = cvalues[0] * sample;
 		if (debug > 1)
-			printf("\tm-s in f[%d][0] with c[0]\n", f);
+			printf("\t%sm-s in f[%d][0] with c[0]\n", prefix, f);
 		return -1;
 	}
 }
@@ -422,20 +427,29 @@ single_pass_filter()
 	int i;
 	int val;
 	int *o_p;
+	/*xxx*/int counts = 0;
 
 	if (verbose) {
 		printf("Running single pass filter\n");
 		fflush(stdout);
 	}
+
+	// these memsets are not really needed.
+	memset(first_stage_filters, 0, sizeof first_stage_filters);
+	memset(second_stage_filters, 0, sizeof second_stage_filters);
+
 	o_p = output[SINGLE_PASS_OUTPUT];
 	for (i = 0; i < sample_size; i++) {
-		val = single_pass_stage(first_stage_filters, i, samples[i]);
-		if (val >= 0) {
-			val = single_pass_stage(second_stage_filters, i/2, val);
-			if (val >= 0)
+		val = single_pass_stage(first_stage_filters, i+1, samples[i]);
+		if (i % 2 == 1) {
+			val = single_pass_stage(second_stage_filters, i/2+2, val);
+			if (i % 4 == 1 && i >= 3*(filter_size-2)) {
 				*o_p++ = val;
+				/*xxx*/counts++;
+			}
 		}
 	}
+	/*xxx*/printf("spf generates %d outputs\n", counts);
 }
 
 /*
@@ -447,10 +461,21 @@ compare(int f1, int f2)
 	int i;
 	int first;
 	int count;
+	int outputs;
+	int sum1, sum2;
+
+	outputs = (sample_size - filter_size)/2 + 1;
+	outputs = (outputs - filter_size)/2 + 1;
+	printf("Comparing %d samples\n", outputs);
+	if (outputs < 0)
+		return;
 
 	first = 1;
 	count = 0;
-	for (i = 0; i < sample_size/4; i++)
+	sum1 = sum2 = 0;
+	for (i = 0; i < outputs; i++) {
+		sum1 += output[f1][i];
+		sum2 += output[f2][i];
 		if (output[f1][i] != output[f2][i]) {
 			count++;
 			if (first) 
@@ -463,10 +488,14 @@ compare(int f1, int f2)
 					output[f2][i]);
 			first = 0;
 		}
+	}
 	if (count == 0)
 		printf("Filters %d and %d match\n", f1, f2);
 	else
-		printf("\t%d of %d samples do not match\n", count, sample_size/4);
+		printf("\t%d of %d samples do not match\n", count, outputs);
+	printf("Averages are %.1f, %.1f\n",
+			(double)sum1 / (double)outputs,
+			(double)sum2 / (double)outputs);
 }
 
 /*
