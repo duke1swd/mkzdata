@@ -429,6 +429,7 @@ emit_store2(int f, int i, int c)
 static void
 emit_reference(int stage, int f, int i, int c)
 {
+	struct output_lines_s *p;
 	char lbuf[128];
 
 	sprintf(lbuf, "%s_%s_%d_%d_%s_%d",
@@ -438,6 +439,27 @@ emit_reference(int stage, int f, int i, int c)
 			f,
 			"v",
 			i);
+	if (debug > 1)
+		printf("Searching for %s\n", lbuf);
+
+	// Do we have a store up the stack for this reference?
+	if (stage == 1)
+		for (p = output_line_list; p; p = p->p_p) {
+			if (p->type == OUTPUT_LINE_TYPE_STORE && debug > 1)
+				printf("\t%s\n", p->u.s.to);
+			if (p->type == OUTPUT_LINE_TYPE_STORE &&
+					strcmp(lbuf, p->u.s.to) == 0) {
+				// Yes, replace ref to filter temp with ref to buffer
+				output_lines_string(p->u.s.from);
+				// remove the store that used the filter temp
+				p->type = OUTPUT_LINE_TYPE_GONE;
+				if (debug > 1)
+					printf("matched\n");
+				return;
+			}
+		}
+
+	// No matching store, pull the data from the filter temp
 	output_lines_string(lbuf);
 }
 
