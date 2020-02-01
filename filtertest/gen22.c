@@ -419,22 +419,29 @@ int main(int argc, char **argv)
 
 	grok_args(argc, argv);
 
-	if (verbose) {
-		printf("Generating code for filter width %d\n", fw);
-		printf("\tNumber of channels = %d\n", n_chan);
-	}
-
 	// some basic math
 	n_f = (fw - 1) / 2;
 	n_coef = (fw + 3) / 4; // omit coefficients that are zero.  Count only the unique ones.
 	n_samp = n_f * 4;
 
+	if (verbose) {
+		printf("Generating code for filter width %d\n", fw);
+		printf("\tNumber of channels = %d\n", n_chan);
+		printf("\tNumber of samples per buffer = %d\n", n_samp);
+	}
+
 	gen_coefficients(cvalues, 0x10000, fofs, fw, wa0, wa1, 1.);
 	do_headers();
 	fclose(header_file);
 
-	for (i = 0; i < n_buffers; i++)
+	for (i = 0; i < n_buffers; i++) {
+		if (i)
+			fprintf(code_file, " else ");
+		fprintf(code_file, "if (buffer_selector == %d) {\n", i);
 		do_buf(i);
+		fprintf(code_file, "}");
+	}
+	fprintf(code_file, "\n");
 	fclose(code_file);
 
 	return 0;
