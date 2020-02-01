@@ -30,6 +30,7 @@ char *output_pointer_name;
 char *word_type;	// all input, output and intermediates are this type
 char *header_file_name;
 char *code_file_name;
+char *ft_file_name;
 double fofs;
 double wa0;
 double wa1;
@@ -44,6 +45,7 @@ int n_samp;	// number of samples in a buffer
 
 FILE *header_file;
 FILE *code_file;
+FILE *ft_file;
 
 int	cvalues[FILTER_SIZE_MAX + 1];
 
@@ -51,7 +53,7 @@ static void
 set_defaults()
 {
 	n_buffers = 3;
-	n_chan = 6;
+	n_chan = 1;
 	fw = 9;
 	buffer_prefix = "adc_b";
 	f1_prefix = "f1";
@@ -60,9 +62,11 @@ set_defaults()
 	channel_prefix = "c";
 	coefficient_prefix = "C";
 	output_pointer_name = "output_pointer";
-	word_type = "unsigned short";
+	word_type = "uint16_t";	// for mkrzero
+	word_type = "int";	// for filter test
 	header_file_name = "filter_defines.h";
 	code_file_name = "filter_code.h";
+	ft_file_name = "filter_test_code.h";
 	fofs = 4.;
 	wa0 = 0.5;
 	wa1 = 0.5;
@@ -117,6 +121,15 @@ grok_args(int argc, char **argv)
 		fprintf(stderr, "%s: cannot open %s for writing\n",
 				myname,
 				code_file_name);
+		perror("open");
+		errors++;
+	}
+
+	ft_file = fopen(ft_file_name, "w");
+	if (ft_file == NULL) {
+		fprintf(stderr, "%s: cannot open %s for writing\n",
+				myname,
+				ft_file_name);
 		perror("open");
 		errors++;
 	}
@@ -303,7 +316,8 @@ emit_store1(int f, int i, int c, int b, int s)
 	// where does it go?
 	emit_storex(1, f, i, c);
 	// where does it come from?
-	fprintf(code_file, "adc_b%d.%s_%d.%s_%d;\n",
+	fprintf(code_file, "%s%d.%s_%d.%s_%d;\n",
+			buffer_prefix,
 			b,
 			sample_prefix,
 			s,
@@ -411,6 +425,52 @@ do_buf(int b)
 		}
 }
 
+static void
+do_ftcode()
+{
+	int i;
+	int buffer;
+
+	fprintf(ft_file,
+		"static void\n"
+		"generated_filter()\n"
+		"{\n"
+		"\tint i;\n"
+		"\tint buffer_selector;\n"
+		"\t%s v;\n"
+		"\t%s *%s;\n"
+		"\n"
+		"\tbuffer_selector = 0;\n"
+		"\t%s = output[GENERATED_FILTER_OUTPUT];\n"
+		"\tfor (i = 0; i <= sample_size - %d; ) {\n",
+		word_type,
+		word_type,
+		output_pointer_name,
+		output_pointer_name,
+		n_samp);
+
+	for (buffer = 0; buffer < n_buffers; buffer++) {
+		fprintf(ft_file, "\t\t");
+		if (buffer)
+			fprintf(ft_file, "} else ");
+		fprintf(ft_file, "if (buffer_selector == %d) {\n", buffer);
+		for (i = 0; i < n_samp; i++)
+			fprintf(ft_file, "\t\t\t%s%d.%s_%d.c_0 = samples[i++];\n",
+					buffer_prefix,
+					buffer,
+					sample_prefix,
+					i);
+	}
+	fprintf(ft_file, "\t\t}\n"
+			"#include \"%s\"\n"
+			"\t\tbuffer_selector += 1;\n"
+			"\t\tif (buffer_selector >= %d)\n"
+			"\t\t\tbuffer_selector = 0;\n"
+			"\t}\n}\n",
+			code_file_name,
+			n_buffers);
+}
+
 int main(int argc, char **argv)
 {
 	int i;
@@ -443,6 +503,9 @@ int main(int argc, char **argv)
 	}
 	fprintf(code_file, "\n");
 	fclose(code_file);
+
+	do_ftcode();
+	fclose(ft_file);
 
 	return 0;
 }

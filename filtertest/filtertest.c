@@ -25,16 +25,18 @@
 #define TWOPI		(2. * 3.14159265359)
 #define	FILTER_SIZE_MAX	65
 #define	STAGE_FILTER_SIZE (FILTER_SIZE_MAX/2)
-#define	N_OUTPUTS	3
+#define	N_OUTPUTS	4
 
 #define	SIMPLE_FILTER_OUTPUT	0
 #define	SINGLE_PASS_OUTPUT	1
 #define SINGLE_V2_OUTPUT	2
+#define	GENERATED_FILTER_OUTPUT	3
 
 char *filter_names[] = {
 	"Simple",
 	"Single v1",
 	"Single v2",
+	"Generated Filter",
 	(char *)0,
 };
 
@@ -72,6 +74,8 @@ struct input_type_s {
 	{ file, "file"},
 	{ 0, (char *)0 },
 };
+
+#include "filter_defines.h"
 
 static void
 set_defaults()
@@ -491,7 +495,6 @@ single_pass_stage_v2(int filters[][STAGE_FILTER_SIZE],
 	return output;
 }
 
-
 static void
 single_pass_filter(int (*stage)(int f[][STAGE_FILTER_SIZE], int i, int s), int f_n)
 {
@@ -519,6 +522,8 @@ single_pass_filter(int (*stage)(int f[][STAGE_FILTER_SIZE], int i, int s), int f
 		}
 	}
 }
+
+#include "filter_test_code.h"
 
 /*
  * Compare two filter outputs.  Complain if they are different.
@@ -602,8 +607,10 @@ doit()
 	if (filter_size % 4 == 1) {
 		//single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
 		single_pass_filter(single_pass_stage_v2, SINGLE_V2_OUTPUT);
+		generated_filter();
 	}
 
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
-	compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
+	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
+	compare(SIMPLE_FILTER_OUTPUT, GENERATED_FILTER_OUTPUT);
 }
