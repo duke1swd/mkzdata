@@ -213,11 +213,12 @@ static void
 do_headers()
 {
 	int i;
+	int j;
+	int stage;
 	int c;
 	int n_words;	// how much memory are we declaring?
 	int words_per_sample;
 	int words_per_buffer;
-	int words_per_filter;
 
 	n_words = 0;
 
@@ -256,42 +257,28 @@ do_headers()
 	fprintf(header_file, "};\n\n");
 	words_per_buffer = words_per_sample * n_samp;
 
-	// Define an filter
-	fprintf(header_file, "struct filter_s {\n");
-	for (i = 0; i < n_coef * 2 - 1; i++)
-		fprintf(header_file, "\t%s v%d;\n",
-				word_type,
-				i);
-	fprintf(header_file, "};\n\n");
-	words_per_filter = n_coef * 2 - 1;
-
 	// Declare the input buffers
 	for (i = 0; i < n_buffers; i++)
-		fprintf(header_file, "struct adc_block_s adc_b%d;\n", i);
+		fprintf(header_file, "static struct adc_block_s adc_b%d;\n", i);
 	fprintf(header_file, "\n");
 	n_words += n_buffers * words_per_buffer;
 
-	// Loop over all channels
+	// Loop over everything declaring the filter temp storage
 	for (c = 0; c < n_chan; c++) {
-		// Declare the first stage filters
-		for (i = 0; i < n_f; i++)
-			fprintf(header_file, "struct filter_s %s_%s_%d_%d;\n",
-					f1_prefix,
-					channel_prefix,
-					c,
-					i);
+		for (stage = 1; stage < 3; stage++)
+			for (i = 0; i < n_f; i++)
+				for (j = 0; j < n_coef * 2 - 1; j++) {
+					fprintf(header_file, "static %s %s_%s_%d_%d_%s_%d;\n",
+							word_type,
+							stage == 1? f1_prefix: f2_prefix,
+							channel_prefix,
+							c,
+							i,
+							"v",
+							j);
+					n_words++;
+				}
 		fprintf(header_file, "\n");
-		n_words += n_f * words_per_filter;
-
-		// Declare the second stage filters
-		for (i = 0; i < n_f; i++)
-			fprintf(header_file, "struct filter_s %s_%s_%d_%d;\n",
-					f2_prefix,
-					channel_prefix,
-					c,
-					i);
-		fprintf(header_file, "\n");
-		n_words += n_f * words_per_filter;
 	}
 
 	if (verbose)
@@ -302,11 +289,12 @@ static void
 emit_storex(int stage, int f, int i, int c)
 {
 	// where does it go?
-	fprintf(code_file, "\tf%d_%s_%d_%d.v%d = ",
-			stage,
+	fprintf(code_file, "\t%s_%s_%d_%d_%s_%d = ",
+			stage == 1? f1_prefix: f2_prefix,
 			channel_prefix,
 			c,
 			f,
+			"v",
 			i);
 }
 
@@ -337,11 +325,12 @@ emit_store2(int f, int i, int c)
 static void
 emit_reference(int stage, int f, int i, int c)
 {
-	fprintf(code_file, "%s_%s_%d_%d.v%d",
+	fprintf(code_file, "%s_%s_%d_%d_%s_%d",
 			stage == 1? f1_prefix: f2_prefix,
 			channel_prefix,
 			c,
 			f,
+			"v",
 			i);
 }
 
