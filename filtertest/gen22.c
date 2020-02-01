@@ -66,7 +66,7 @@ set_defaults()
 	fofs = 4.;
 	wa0 = 0.5;
 	wa1 = 0.5;
-	verbose = 0;
+	verbose = 1;
 	debug = 0;
 }
 
@@ -200,6 +200,13 @@ static void
 do_headers()
 {
 	int i;
+	int c;
+	int n_words;	// how much memory are we declaring?
+	int words_per_sample;
+	int words_per_buffer;
+	int words_per_filter;
+
+	n_words = 0;
 
 	fprintf(header_file, "// Filter Size = %d\n\n", fw);
 
@@ -223,6 +230,9 @@ do_headers()
 				i);
 	}
 	fprintf(header_file, "};\n\n");
+	words_per_sample = n_chan;
+	if (n_chan > 4)
+		words_per_sample += 2;
 
 	// Define an input buffer
 	fprintf(header_file, "struct adc_block_s {\n");
@@ -231,17 +241,174 @@ do_headers()
 				sample_prefix,
 				i);
 	fprintf(header_file, "};\n\n");
+	words_per_buffer = words_per_sample * n_samp;
+
+	// Define an filter
+	fprintf(header_file, "struct filter_s {\n");
+	for (i = 0; i < n_coef * 2 - 1; i++)
+		fprintf(header_file, "\t%s v%d;\n",
+				word_type,
+				i);
+	fprintf(header_file, "};\n\n");
+	words_per_filter = n_coef * 2 - 1;
 
 	// Declare the input buffers
 	for (i = 0; i < n_buffers; i++)
 		fprintf(header_file, "struct adc_block_s adc_b%d;\n", i);
 	fprintf(header_file, "\n");
+	n_words += n_buffers * words_per_buffer;
+
+	// Loop over all channels
+	for (c = 0; c < n_chan; c++) {
+		// Declare the first stage filters
+		for (i = 0; i < n_f; i++)
+			fprintf(header_file, "struct filter_s %s_%s_%d_%d;\n",
+					f1_prefix,
+					channel_prefix,
+					c,
+					i);
+		fprintf(header_file, "\n");
+		n_words += n_f * words_per_filter;
+
+		// Declare the second stage filters
+		for (i = 0; i < n_f; i++)
+			fprintf(header_file, "struct filter_s %s_%s_%d_%d;\n",
+					f2_prefix,
+					channel_prefix,
+					c,
+					i);
+		fprintf(header_file, "\n");
+		n_words += n_f * words_per_filter;
+	}
+
+	if (verbose)
+		printf("Declared %d words of storage\n", n_words);
 }
 
-// b1 is the current buffer, b2 is the prior buffer
 static void
-do_buf(int b1, int b2, int last)
+emit_storex(int stage, int f, int i, int c)
 {
+	// where does it go?
+	fprintf(code_file, "\tf%d_%s_%d_%d.v%d = ",
+			stage,
+			channel_prefix,
+			c,
+			f,
+			i);
+}
+
+static void
+emit_store1(int f, int i, int c, int b, int s)
+{
+	// where does it go?
+	emit_storex(1, f, i, c);
+	// where does it come from?
+	fprintf(code_file, "adc_b%d.%s_%d.%s_%d;\n",
+			b,
+			sample_prefix,
+			s,
+			channel_prefix,
+			c);
+}
+
+static void
+emit_store2(int f, int i, int c)
+{
+	// where does it go?
+	emit_storex(2, f, i, c);
+	// where does it come from?
+	fprintf(code_file, "v;\n");
+}
+
+static void
+emit_reference(int stage, int f, int i, int c)
+{
+	fprintf(code_file, "%s_%s_%d_%d.v%d",
+			stage == 1? f1_prefix: f2_prefix,
+			channel_prefix,
+			c,
+			f,
+			i);
+}
+
+
+static void
+do_buf(int b)
+{
+	int i;
+	int s;	// current sample
+	int c;	// current channel
+	int f;	// current filter
+	int fbase;
+
+	for (c = 0; c < n_chan; c++)
+		for (s = 0; s < n_samp; s++) {
+			// this code copied from filtertest.c and modified as needed
+			fbase = (s/2) % n_f;
+			if (s % 2 == 0) {
+				// Index is even
+				for (i = 0; i < n_f/2; i++) {
+					f = (i + fbase) % n_f;
+					emit_store1(f, i+1, c, b, s);
+					f = (n_f  - 1 - i + fbase) % n_f;
+					emit_store1(f, i+n_coef, c, b, s);
+				}
+			} else {
+				f = fbase;
+				emit_store1(f, 0, c, b, s);
+				continue;	// no more work on this sample/channel combo
+			}
+
+			// Sum up filter 'f' and spit it out
+			fprintf(code_file, "\tv = (%s_0 * ",
+					coefficient_prefix);
+			emit_reference(1, f, 0, c);
+
+			for (i = 1; i < n_coef; i++) {
+				fprintf(code_file, " +\n\t\t");
+				fprintf(code_file, "%s_%d * (",
+						coefficient_prefix, i * 2 - 1);
+				emit_reference(1, f, i, c);
+				fprintf(code_file, " + ");
+				emit_reference(1, f, i + n_coef - 1, c);
+				fprintf(code_file, ")");
+			}
+			fprintf(code_file, ") >> 16;\n");
+
+			// Handle the second stage filters here!
+			// QQQ
+			fbase = (s/4) % n_f;
+			if (s/2 % 2 == 0) {
+				// Index is even
+				for (i = 0; i < n_f/2; i++) {
+					f = (i + fbase) % n_f;
+					emit_store2(f, i+1, c);
+					f = (n_f  - 1 - i + fbase) % n_f;
+					emit_store2(f, i+n_coef, c);
+				}
+			} else {
+				f = fbase;
+				emit_store2(f, 0, c);
+				continue;	// no more work on this sample/channel combo
+			}
+
+			// Sum up filter 'f' and spit it out
+			fprintf(code_file, "\t*%s++ = (%s_0 * ",
+					output_pointer_name,
+					coefficient_prefix);
+			emit_reference(2, f, 0, c);
+
+			for (i = 1; i < n_coef; i++) {
+				fprintf(code_file, " +\n\t\t");
+				fprintf(code_file, "%s_%d * (",
+						coefficient_prefix, i * 2 - 1);
+				emit_reference(2, f, i, c);
+				fprintf(code_file, " + ");
+				emit_reference(2, f, i + n_coef - 1, c);
+				fprintf(code_file, ")");
+			}
+			fprintf(code_file, ") >> 16;\n");
+		}
 }
 
 int main(int argc, char **argv)
@@ -252,6 +419,11 @@ int main(int argc, char **argv)
 
 	grok_args(argc, argv);
 
+	if (verbose) {
+		printf("Generating code for filter width %d\n", fw);
+		printf("\tNumber of channels = %d\n", n_chan);
+	}
+
 	// some basic math
 	n_f = (fw - 1) / 2;
 	n_coef = (fw + 3) / 4; // omit coefficients that are zero.  Count only the unique ones.
@@ -261,8 +433,9 @@ int main(int argc, char **argv)
 	do_headers();
 	fclose(header_file);
 
-	do_buf(0, n_buffers - 1, 0);
-	for (i = 1; i < n_buffers; i++)
-		do_buf(i, i-1, i == n_buffers - 1);
+	for (i = 0; i < n_buffers; i++)
+		do_buf(i);
+	fclose(code_file);
+
 	return 0;
 }
