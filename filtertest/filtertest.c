@@ -24,7 +24,19 @@
 #define	MAX_SAMPLES	(1000*1000)
 #define TWOPI		(2. * 3.14159265359)
 #define	FILTER_SIZE_MAX	65
+#define	STAGE_FILTER_SIZE (FILTER_SIZE_MAX/2)
 #define	N_OUTPUTS	3
+
+#define	SIMPLE_FILTER_OUTPUT	0
+#define	SINGLE_PASS_OUTPUT	1
+#define SINGLE_V2_OUTPUT	2
+
+char *filter_names[] = {
+	"Simple",
+	"Single v1",
+	"Single v2",
+	(char *)0,
+};
 
 enum input_types_e { noise, sqwave, snwave, file };
 
@@ -47,8 +59,8 @@ int	cvalues[FILTER_SIZE_MAX];
 int	samples[MAX_SAMPLES];
 int	halfsamp[MAX_SAMPLES/2];
 int	output[N_OUTPUTS][MAX_SAMPLES/4];
-int	first_stage_filters[(FILTER_SIZE_MAX-1)/2][(FILTER_SIZE_MAX-1)/4 + 1];
-int	second_stage_filters[(FILTER_SIZE_MAX-1)/2][(FILTER_SIZE_MAX-1)/4 + 1];
+int	first_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
+int	second_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
 
 struct input_type_s {
 	enum input_types_e itype;
@@ -355,8 +367,6 @@ simple2x(int *input, int *output, int n)
 	}
 }
 
-#define	SIMPLE_FILTER_OUTPUT	0
-#define	SINGLE_PASS_OUTPUT	1
 static void
 simple_filter()
 {
@@ -369,7 +379,7 @@ simple_filter()
 }
 
 static int
-single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
+single_pass_stage(int filters[][STAGE_FILTER_SIZE],
 	       	int index,
 		int sample)
 {
@@ -421,8 +431,69 @@ single_pass_stage(int filters[][(FILTER_SIZE_MAX-1)/4 + 1],
 	}
 }
 
+static int
+single_pass_stage_v2(int filters[][STAGE_FILTER_SIZE],
+	       	int index,
+		int sample)
+{
+	int i, f;
+	int output;
+	int fbase;
+	int n_filters = (filter_size-1)/2;
+	int n_coeff = (filter_size+3)/4;
+	char *prefix;
+
+	if (index == 1 && debug > 1)
+		printf("n_filters = %d, n_coeff = %d\n", n_filters, n_coeff);
+
+	// fbase rotates amongst the filters
+	fbase = (index/2) % n_filters;
+	if (debug > 1) {
+		prefix = "";
+		if (filters == second_stage_filters)
+			prefix = "\t";
+		printf("%sindex = %d, fbase = %d\n", prefix, index, fbase);
+	}
+
+	if (index % 2 == 0) {
+		// Index is even
+		for (i = 0; i < n_filters/2; i++) {
+			f = (i + fbase) % n_filters;
+			filters[f][i+1] = sample;
+			if (debug > 1)
+				printf("\t%sstoring %d in f[%d][%d]\n", prefix, sample, f, i+1);
+			f = (n_filters  - 1 - i + fbase) % n_filters;
+			filters[f][i+n_coeff] = sample;
+			if (debug > 1)
+				printf("\t%sstoring in f[%d][%d]\n", prefix, f, i+n_coeff);
+		}
+	} else {
+		f = fbase;
+		filters[f][0] = sample;
+		if (debug > 1)
+			printf("\t%sstoring in f[%d][0]\n", prefix, f);
+		return -1;
+	}
+
+	// Sum up filter 'f' and spit it out
+	if (debug > 1)
+		printf("\t%soutputing filter f[%d] C_0(0)", prefix, f);
+	output = filters[f][0] * cvalues[0];
+	for (i = 1; i < n_coeff; i++) {
+		output += cvalues[i * 2 - 1] * (filters[f][i] + filters[f][i + n_coeff-1]);
+		if (debug > 1)
+			printf(" C_%d(%d,%d)", i*2-1, i, i + n_coeff-1);
+	}
+	output >>= 16;
+	if (debug > 1)
+		printf(" => %d\n", output);
+
+	return output;
+}
+
+
 static void
-single_pass_filter()
+single_pass_filter(int (*stage)(int f[][STAGE_FILTER_SIZE], int i, int s), int f_n)
 {
 	int i;
 	int val;
@@ -437,11 +508,11 @@ single_pass_filter()
 	memset(first_stage_filters, 0, sizeof first_stage_filters);
 	memset(second_stage_filters, 0, sizeof second_stage_filters);
 
-	o_p = output[SINGLE_PASS_OUTPUT];
+	o_p = output[f_n];
 	for (i = 0; i < sample_size; i++) {
-		val = single_pass_stage(first_stage_filters, i+1, samples[i]);
+		val = stage(first_stage_filters, i+1, samples[i]);
 		if (i % 2 == 1) {
-			val = single_pass_stage(second_stage_filters, (i-1)/2, val);
+			val = stage(second_stage_filters, (i-1)/2, val);
 			if (i % 4 == 1 && i >= 3*(filter_size-2)) {
 				*o_p++ = val;
 			}
@@ -463,7 +534,10 @@ compare(int f1, int f2)
 
 	outputs = (sample_size - filter_size)/2 + 1;
 	outputs = (outputs - filter_size)/2 + 1;
-	printf("Comparing %d samples\n", outputs);
+	printf("Comparing filters %s and %s on %d samples\n",
+			filter_names[f1],
+			filter_names[f2],
+			outputs);
 	if (outputs < 0)
 		return;
 
@@ -487,12 +561,13 @@ compare(int f1, int f2)
 		}
 	}
 	if (count == 0)
-		printf("Filters %d and %d match\n", f1, f2);
-	else
+		printf("Filters match\n");
+	else {
 		printf("\t%d of %d samples do not match\n", count, outputs);
-	printf("Averages are %.1f, %.1f\n",
-			(double)sum1 / (double)outputs,
-			(double)sum2 / (double)outputs);
+		printf("Averages are %.1f, %.1f\n",
+				(double)sum1 / (double)outputs,
+				(double)sum2 / (double)outputs);
+	}
 }
 
 /*
@@ -501,6 +576,9 @@ compare(int f1, int f2)
 static void
 doit()
 {
+	if (debug)
+		printf("Filter width = %d\n", filter_size);
+
 	// Create the filter coefficients
 	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, 1.);
 
@@ -521,8 +599,11 @@ doit()
 	}
 
 	simple_filter();
-	if (filter_size % 4 == 1)
-		single_pass_filter();
+	if (filter_size % 4 == 1) {
+		//single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
+		single_pass_filter(single_pass_stage_v2, SINGLE_V2_OUTPUT);
+	}
 
-	compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
+	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
+	compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
 }
