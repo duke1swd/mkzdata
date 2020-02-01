@@ -221,7 +221,7 @@ do_headers()
 
 	n_words = 0;
 
-	fprintf(header_file, "// Filter Size = %d\n\n", fw);
+	fprintf(header_file, "#define GENERATED_FILTER_SIZE %d\n\n", fw);
 
 	// Define the filter coefficients
 	print_constant(0, cvalues[0]);

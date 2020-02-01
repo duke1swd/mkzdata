@@ -189,6 +189,13 @@ i_found:
 				filter_size);
 	}
 
+	if (filter_size != GENERATED_FILTER_SIZE) {
+		fprintf(stderr, "%s: Warning: Skipping generated filter.\n", myname);
+		fprintf(stderr, "\tSet filter size (%d) to %d to enable\n",
+				filter_size,
+				GENERATED_FILTER_SIZE);
+	}
+
 	if (adc_frequency < 1) {
 		fprintf(stderr, "%s: adc frequency (%d) must be positive\n",
 				myname,
@@ -528,10 +535,13 @@ single_pass_filter(int (*stage)(int f[][STAGE_FILTER_SIZE], int i, int s), int f
 static void
 call_generated_filter()
 {
+	int shift;
+
 	generated_filter();
 	// discard the first few output samples
+	shift = (filter_size - 1)/2 + (filter_size - 1)/4 - 1;
 	memmove(output[GENERATED_FILTER_OUTPUT], 
-			output[GENERATED_FILTER_OUTPUT] + (filter_size + 1) / 2, 
+			output[GENERATED_FILTER_OUTPUT] + shift, 
 			sizeof (int) * sample_size / 4);
 }
 
@@ -618,7 +628,8 @@ doit()
 		//single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
 		single_pass_filter(single_pass_stage_v2, SINGLE_V2_OUTPUT);
 	}
-	call_generated_filter();
+	if (filter_size == GENERATED_FILTER_SIZE)
+		call_generated_filter();
 
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
