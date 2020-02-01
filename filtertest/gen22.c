@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 
 #define TWOPI		(2. * 3.14159265359)
 #define	FILTER_SIZE_MAX	65
@@ -48,6 +49,22 @@ FILE *code_file;
 FILE *ft_file;
 
 int	cvalues[FILTER_SIZE_MAX + 1];
+
+#define	OUTPUT_LINE_TYPE_STRING	1
+#define	OUTPUT_LINE_TYPE_STORE	2
+#define	OUTPUT_LINE_TYPE_GONE	3
+
+struct output_lines_s {
+	int type;
+	struct output_lines_s *p_p;
+	union {
+		char *line;
+		struct {
+			char *from;
+			char *to;
+		} s;
+	} u;
+};
 
 static void
 set_defaults()
@@ -285,32 +302,119 @@ do_headers()
 		printf("Declared %d words of storage\n", n_words);
 }
 
+/*
+ * The output_lines routines are designed to optimize out unneeded load/stores
+ * This implementation leaks memory rapidly.
+ * And is horribly inefficient
+ */
+static char *
+ds_copy(char *s)
+{
+	char *q;
+
+	q = (char *)malloc(strlen(s)+1);
+	if (q == (char *)0) {
+		fprintf(stderr, "%s: malloc failed\n", myname);
+		exit(1);
+	}
+	strcpy(q, s);
+	return q;
+}
+
+static struct output_lines_s *output_line_list;
+
+static void output_lines_init()
+{
+	output_line_list = (struct output_lines_s *)0;
+}
+
+static struct
+output_lines_s *new_output_lines()
+{
+	struct output_lines_s *p;
+
+	p = (struct output_lines_s *)malloc(sizeof (struct output_lines_s));
+	if (p == (struct output_lines_s *)0) {
+		fprintf(stderr, "%s: malloc failed\n", myname);
+		exit(1);
+	}
+	p->type = OUTPUT_LINE_TYPE_GONE;
+	p->p_p = output_line_list;
+	output_line_list = p;
+	return p;
+}
+
+static void
+output_lines_string(char *s)
+{
+	struct output_lines_s *p;
+
+	p = new_output_lines();
+	p->type = OUTPUT_LINE_TYPE_STRING;
+	p->u.line = ds_copy(s);
+}
+
+static void
+output_lines_internal(struct output_lines_s *p)
+{
+	if (p) {
+		output_lines_internal(p->p_p);
+		switch (p->type) {
+			case OUTPUT_LINE_TYPE_STRING:
+				fprintf(code_file, "%s", p->u.line);
+				break;
+			case OUTPUT_LINE_TYPE_STORE:
+				fprintf(code_file, "\t%s = %s;\n",
+						p->u.s.to,
+						p->u.s.from);
+				break;
+			default:
+				break;
+		}
+	}
+}
+
+static void output_lines()
+{
+	output_lines_internal(output_line_list);
+}
+
 static void
 emit_storex(int stage, int f, int i, int c)
 {
+	struct output_lines_s *p;
+	char lbuf[128];
+
 	// where does it go?
-	fprintf(code_file, "\t%s_%s_%d_%d_%s_%d = ",
+	sprintf(lbuf, "%s_%s_%d_%d_%s_%d",
 			stage == 1? f1_prefix: f2_prefix,
 			channel_prefix,
 			c,
 			f,
 			"v",
 			i);
+	p = new_output_lines();
+	p->type = OUTPUT_LINE_TYPE_STORE;
+	p->u.s.to = ds_copy(lbuf);
+	p->u.s.from = "";
 }
 
 static void
 emit_store1(int f, int i, int c, int b, int s)
 {
+	char lbuf[128];
+
 	// where does it go?
 	emit_storex(1, f, i, c);
 	// where does it come from?
-	fprintf(code_file, "%s%d.%s_%d.%s_%d;\n",
+	sprintf(lbuf, "%s%d.%s_%d.%s_%d",
 			buffer_prefix,
 			b,
 			sample_prefix,
 			s,
 			channel_prefix,
 			c);
+	output_line_list->u.s.from = ds_copy(lbuf);
 }
 
 static void
@@ -319,19 +423,22 @@ emit_store2(int f, int i, int c)
 	// where does it go?
 	emit_storex(2, f, i, c);
 	// where does it come from?
-	fprintf(code_file, "v;\n");
+	output_line_list->u.s.from = "v";
 }
 
 static void
 emit_reference(int stage, int f, int i, int c)
 {
-	fprintf(code_file, "%s_%s_%d_%d_%s_%d",
+	char lbuf[128];
+
+	sprintf(lbuf, "%s_%s_%d_%d_%s_%d",
 			stage == 1? f1_prefix: f2_prefix,
 			channel_prefix,
 			c,
 			f,
 			"v",
 			i);
+	output_lines_string(lbuf);
 }
 
 
@@ -343,8 +450,10 @@ do_buf(int b)
 	int c;	// current channel
 	int f;	// current filter
 	int fbase;
+	char lbuf[1024];
 
-	for (c = 0; c < n_chan; c++)
+	for (c = 0; c < n_chan; c++) {
+		output_lines_init();
 		for (s = 0; s < n_samp; s++) {
 			// this code copied from filtertest.c and modified as needed
 			fbase = ((s+1)/2) % n_f;
@@ -360,20 +469,26 @@ do_buf(int b)
 				}
 
 				// Sum up filter 'f' and pass to the second stage
-				fprintf(code_file, "\tv = (%s_0 * ",
+				sprintf(lbuf, "\tv = (%s_0 * ",
 						coefficient_prefix);
+				output_lines_string(lbuf);
 				emit_reference(1, f, 0, c);
 
 				for (i = 1; i < n_coef; i++) {
-					fprintf(code_file, " +\n\t\t");
-					fprintf(code_file, "%s_%d * (",
+					sprintf(lbuf, " +\n\t\t");
+					output_lines_string(lbuf);
+					sprintf(lbuf, "%s_%d * (",
 							coefficient_prefix, i * 2 - 1);
+					output_lines_string(lbuf);
 					emit_reference(1, f, i, c);
-					fprintf(code_file, " + ");
+					sprintf(lbuf, " + ");
+					output_lines_string(lbuf);
 					emit_reference(1, f, i + n_coef - 1, c);
-					fprintf(code_file, ")");
+					sprintf(lbuf, ")");
+					output_lines_string(lbuf);
 				}
-				fprintf(code_file, ") >> 16;\n");
+				sprintf(lbuf, ") >> 16;\n");
+				output_lines_string(lbuf);
 
 				// Handle the second stage filters here!
 				i = (s-1)/2;
@@ -390,24 +505,32 @@ do_buf(int b)
 					}
 
 					// Sum up filter 'f' and spit it out
-					fprintf(code_file, "\t*%s++ = (%s_0 * ",
+					sprintf(lbuf, "\t*%s++ = (%s_0 * ",
 							output_pointer_name,
 							coefficient_prefix);
+					output_lines_string(lbuf);
 					emit_reference(2, f, 0, c);
 
 					for (i = 1; i < n_coef; i++) {
-						fprintf(code_file, " +\n\t\t");
-						fprintf(code_file, "%s_%d * (",
+						sprintf(lbuf, " +\n\t\t");
+						output_lines_string(lbuf);
+						sprintf(lbuf, "%s_%d * (",
 								coefficient_prefix, i * 2 - 1);
+						output_lines_string(lbuf);
 						emit_reference(2, f, i, c);
-						fprintf(code_file, " + ");
+						sprintf(lbuf, " + ");
+						output_lines_string(lbuf);
 						emit_reference(2, f, i + n_coef - 1, c);
-						fprintf(code_file, ")");
+						sprintf(lbuf, ")");
+						output_lines_string(lbuf);
 					}
-					fprintf(code_file, ") >> 16;\n");
+					sprintf(lbuf, ") >> 16;\n");
+					output_lines_string(lbuf);
 				}
 			}
 		}
+		output_lines();
+	}
 }
 
 static void
