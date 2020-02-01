@@ -60,7 +60,7 @@ double wa1;
 int	cvalues[FILTER_SIZE_MAX];
 int	samples[MAX_SAMPLES];
 int	halfsamp[MAX_SAMPLES/2];
-int	output[N_OUTPUTS][MAX_SAMPLES/4];
+int	output[N_OUTPUTS][MAX_SAMPLES/4+FILTER_SIZE_MAX];
 int	first_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
 int	second_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
 
@@ -525,6 +525,16 @@ single_pass_filter(int (*stage)(int f[][STAGE_FILTER_SIZE], int i, int s), int f
 
 #include "filter_test_code.h"
 
+static void
+call_generated_filter()
+{
+	generated_filter();
+	// discard the first few output samples
+	memmove(output[GENERATED_FILTER_OUTPUT], 
+			output[GENERATED_FILTER_OUTPUT] + (filter_size + 1) / 2, 
+			sizeof (int) * sample_size / 4);
+}
+
 /*
  * Compare two filter outputs.  Complain if they are different.
  */
@@ -607,8 +617,8 @@ doit()
 	if (filter_size % 4 == 1) {
 		//single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
 		single_pass_filter(single_pass_stage_v2, SINGLE_V2_OUTPUT);
-		generated_filter();
 	}
+	call_generated_filter();
 
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);

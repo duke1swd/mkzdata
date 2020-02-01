@@ -358,70 +358,66 @@ do_buf(int b)
 	for (c = 0; c < n_chan; c++)
 		for (s = 0; s < n_samp; s++) {
 			// this code copied from filtertest.c and modified as needed
-			fbase = (s/2) % n_f;
+			fbase = ((s+1)/2) % n_f;
 			if (s % 2 == 0) {
-				// Index is even
+				f = fbase;
+				emit_store1(f, 0, c, b, s);
+			} else {
 				for (i = 0; i < n_f/2; i++) {
 					f = (i + fbase) % n_f;
 					emit_store1(f, i+1, c, b, s);
 					f = (n_f  - 1 - i + fbase) % n_f;
 					emit_store1(f, i+n_coef, c, b, s);
 				}
-			} else {
-				f = fbase;
-				emit_store1(f, 0, c, b, s);
-				continue;	// no more work on this sample/channel combo
-			}
 
-			// Sum up filter 'f' and spit it out
-			fprintf(code_file, "\tv = (%s_0 * ",
-					coefficient_prefix);
-			emit_reference(1, f, 0, c);
+				// Sum up filter 'f' and pass to the second stage
+				fprintf(code_file, "\tv = (%s_0 * ",
+						coefficient_prefix);
+				emit_reference(1, f, 0, c);
 
-			for (i = 1; i < n_coef; i++) {
-				fprintf(code_file, " +\n\t\t");
-				fprintf(code_file, "%s_%d * (",
-						coefficient_prefix, i * 2 - 1);
-				emit_reference(1, f, i, c);
-				fprintf(code_file, " + ");
-				emit_reference(1, f, i + n_coef - 1, c);
-				fprintf(code_file, ")");
-			}
-			fprintf(code_file, ") >> 16;\n");
-
-			// Handle the second stage filters here!
-			// QQQ
-			fbase = (s/4) % n_f;
-			if (s/2 % 2 == 0) {
-				// Index is even
-				for (i = 0; i < n_f/2; i++) {
-					f = (i + fbase) % n_f;
-					emit_store2(f, i+1, c);
-					f = (n_f  - 1 - i + fbase) % n_f;
-					emit_store2(f, i+n_coef, c);
+				for (i = 1; i < n_coef; i++) {
+					fprintf(code_file, " +\n\t\t");
+					fprintf(code_file, "%s_%d * (",
+							coefficient_prefix, i * 2 - 1);
+					emit_reference(1, f, i, c);
+					fprintf(code_file, " + ");
+					emit_reference(1, f, i + n_coef - 1, c);
+					fprintf(code_file, ")");
 				}
-			} else {
-				f = fbase;
-				emit_store2(f, 0, c);
-				continue;	// no more work on this sample/channel combo
-			}
+				fprintf(code_file, ") >> 16;\n");
 
-			// Sum up filter 'f' and spit it out
-			fprintf(code_file, "\t*%s++ = (%s_0 * ",
-					output_pointer_name,
-					coefficient_prefix);
-			emit_reference(2, f, 0, c);
+				// Handle the second stage filters here!
+				i = (s-1)/2;
+				fbase = (i/2) % n_f;
+				if (i % 2 == 1) {
+					f = fbase;
+					emit_store2(f, 0, c);
+				} else {
+					for (i = 0; i < n_f/2; i++) {
+						f = (i + fbase) % n_f;
+						emit_store2(f, i+1, c);
+						f = (n_f  - 1 - i + fbase) % n_f;
+						emit_store2(f, i+n_coef, c);
+					}
 
-			for (i = 1; i < n_coef; i++) {
-				fprintf(code_file, " +\n\t\t");
-				fprintf(code_file, "%s_%d * (",
-						coefficient_prefix, i * 2 - 1);
-				emit_reference(2, f, i, c);
-				fprintf(code_file, " + ");
-				emit_reference(2, f, i + n_coef - 1, c);
-				fprintf(code_file, ")");
+					// Sum up filter 'f' and spit it out
+					fprintf(code_file, "\t*%s++ = (%s_0 * ",
+							output_pointer_name,
+							coefficient_prefix);
+					emit_reference(2, f, 0, c);
+
+					for (i = 1; i < n_coef; i++) {
+						fprintf(code_file, " +\n\t\t");
+						fprintf(code_file, "%s_%d * (",
+								coefficient_prefix, i * 2 - 1);
+						emit_reference(2, f, i, c);
+						fprintf(code_file, " + ");
+						emit_reference(2, f, i + n_coef - 1, c);
+						fprintf(code_file, ")");
+					}
+					fprintf(code_file, ") >> 16;\n");
+				}
 			}
-			fprintf(code_file, ") >> 16;\n");
 		}
 }
 
