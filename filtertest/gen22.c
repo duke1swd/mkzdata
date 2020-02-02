@@ -66,6 +66,13 @@ struct output_lines_s {
 	} u;
 };
 
+struct output_defines_s {
+	int status;	// true if referenced.
+	char *name;
+};
+
+int n_words;	// how much memory are we declaring?
+
 static void
 set_defaults()
 {
@@ -226,82 +233,6 @@ print_constant(int n, int v)
 			v);
 }
 
-static void
-do_headers()
-{
-	int i;
-	int j;
-	int stage;
-	int c;
-	int n_words;	// how much memory are we declaring?
-	int words_per_sample;
-	int words_per_buffer;
-
-	n_words = 0;
-
-	fprintf(header_file, "#define GENERATED_FILTER_SIZE %d\n\n", fw);
-
-	// Define the filter coefficients
-	print_constant(0, cvalues[0]);
-	for (i = 1; i <= (n_coef-1) * 2 - 1; i += 2)
-	       print_constant(i, cvalues[i]);	
-	fprintf(header_file, "\n");
-
-	// Define an input sample
-	fprintf(header_file, "struct sample_s {\n");
-	for (i = 0; i < n_chan; i++) {
-		if (i == 4)
-			fprintf(header_file, "\t%s null_0;\n"
-					"\t%s null_1;\n",
-					word_type,
-					word_type);
-		fprintf(header_file, "\t%s %s_%d;\n",
-				word_type,
-				channel_prefix,
-				i);
-	}
-	fprintf(header_file, "};\n\n");
-	words_per_sample = n_chan;
-	if (n_chan > 4)
-		words_per_sample += 2;
-
-	// Define an input buffer
-	fprintf(header_file, "struct adc_block_s {\n");
-	for (i = 0; i < n_samp; i++)
-		fprintf(header_file, "\tstruct sample_s %s_%d;\n",
-				sample_prefix,
-				i);
-	fprintf(header_file, "};\n\n");
-	words_per_buffer = words_per_sample * n_samp;
-
-	// Declare the input buffers
-	for (i = 0; i < n_buffers; i++)
-		fprintf(header_file, "static struct adc_block_s adc_b%d;\n", i);
-	fprintf(header_file, "\n");
-	n_words += n_buffers * words_per_buffer;
-
-	// Loop over everything declaring the filter temp storage
-	for (c = 0; c < n_chan; c++) {
-		for (stage = 1; stage < 3; stage++)
-			for (i = 0; i < n_f; i++)
-				for (j = 0; j < n_coef * 2 - 1; j++) {
-					fprintf(header_file, "static %s %s_%s_%d_%d_%s_%d;\n",
-							word_type,
-							stage == 1? f1_prefix: f2_prefix,
-							channel_prefix,
-							c,
-							i,
-							"v",
-							j);
-					n_words++;
-				}
-		fprintf(header_file, "\n");
-	}
-
-	if (verbose)
-		printf("Declared %d words of storage\n", n_words);
-}
-
 /*
  * The output_lines routines are designed to optimize out unneeded load/stores
  * This implementation leaks memory rapidly.
@@ -321,9 +252,12 @@ ds_copy(char *s)
 	return q;
 }
 
+static struct output_defines_s *output_defines_table;
+int output_defines_table_length;
 static struct output_lines_s *output_line_list;
 
-static void output_lines_init()
+static void
+output_lines_init()
 {
 	output_line_list = (struct output_lines_s *)0;
 }
@@ -374,9 +308,129 @@ output_lines_internal(struct output_lines_s *p)
 	}
 }
 
-static void output_lines()
+static void
+output_lines()
 {
 	output_lines_internal(output_line_list);
+}
+
+static void
+output_defines_init(int n)
+{
+	output_defines_table = (struct output_defines_s *)malloc(n * sizeof (struct output_defines_s));
+	if (output_defines_table == (struct output_defines_s *)0) {
+		fprintf(stderr, "%s: malloc failed\n", myname);
+		exit(1);
+	}
+	memset(output_defines_table, 0, n * sizeof (struct output_defines_s));
+	output_defines_table_length = n;
+}
+
+static void
+output_defines_reference(char *s)
+{
+	int i;
+	struct output_defines_s *p;
+
+	for (p = output_defines_table, i = 0; i < output_defines_table_length; i++, p++)
+		if (strcmp(s, p->name) == 0) {
+			p->status = 1;
+			return;
+		}
+
+	fprintf(stderr, "%s: reference to undefined temp variable %s\n",
+			myname, s);
+	exit(1);
+}
+
+static void
+output_defines_print()
+{
+	int i;
+	struct output_defines_s *p;
+
+	for (p = output_defines_table, i = 0; i < output_defines_table_length; i++, p++)
+		if (p->status) {
+			fprintf(header_file, "static %s %s;\n",
+					word_type,
+					p->name);
+			n_words++;
+		}
+}
+
+
+static void
+do_headers()
+{
+	int i;
+	int j;
+	int k;
+	int stage;
+	int c;
+	int words_per_sample;
+	int words_per_buffer;
+	char lbuf[128];
+
+	n_words = 0;
+
+	fprintf(header_file, "#define GENERATED_FILTER_SIZE %d\n\n", fw);
+
+	// Define the filter coefficients
+	print_constant(0, cvalues[0]);
+	for (i = 1; i <= (n_coef-1) * 2 - 1; i += 2)
+	       print_constant(i, cvalues[i]);	
+	fprintf(header_file, "\n");
+
+	// Define an input sample
+	fprintf(header_file, "struct sample_s {\n");
+	for (i = 0; i < n_chan; i++) {
+		if (i == 4)
+			fprintf(header_file, "\t%s null_0;\n"
+					"\t%s null_1;\n",
+					word_type,
+					word_type);
+		fprintf(header_file, "\t%s %s_%d;\n",
+				word_type,
+				channel_prefix,
+				i);
+	}
+	fprintf(header_file, "};\n\n");
+	words_per_sample = n_chan;
+	if (n_chan > 4)
+		words_per_sample += 2;
+
+	// Define an input buffer
+	fprintf(header_file, "struct adc_block_s {\n");
+	for (i = 0; i < n_samp; i++)
+		fprintf(header_file, "\tstruct sample_s %s_%d;\n",
+				sample_prefix,
+				i);
+	fprintf(header_file, "};\n\n");
+	words_per_buffer = words_per_sample * n_samp;
+
+	// Declare the input buffers
+	for (i = 0; i < n_buffers; i++)
+		fprintf(header_file, "static struct adc_block_s adc_b%d;\n", i);
+	fprintf(header_file, "\n");
+	n_words += n_buffers * words_per_buffer;
+
+	// Loop over everything declaring the filter temp storage
+	output_defines_init(n_chan * 2 * n_f * (n_coef * 2 - 1));
+	k = 0;
+	for (c = 0; c < n_chan; c++) {
+		for (stage = 1; stage < 3; stage++)
+			for (i = 0; i < n_f; i++)
+				for (j = 0; j < n_coef * 2 - 1; j++) {
+					sprintf(lbuf, "%s_%s_%d_%d_%s_%d",
+							stage == 1? f1_prefix: f2_prefix,
+							channel_prefix,
+							c,
+							i,
+							"v",
+							j);
+					output_defines_table[k++].name = ds_copy(lbuf);
+				}
+	}
 }
 
 static void
@@ -460,6 +514,7 @@ emit_reference(int stage, int f, int i, int c)
 		}
 
 	// No matching store, pull the data from the filter temp
+	output_defines_reference(lbuf);
 	output_lines_string(lbuf);
 }
 
@@ -622,7 +677,6 @@ int main(int argc, char **argv)
 
 	gen_coefficients(cvalues, 0x10000, fofs, fw, wa0, wa1, 1.);
 	do_headers();
-	fclose(header_file);
 
 	for (i = 0; i < n_buffers; i++) {
 		if (i)
@@ -633,6 +687,13 @@ int main(int argc, char **argv)
 	}
 	fprintf(code_file, "\n");
 	fclose(code_file);
+
+	output_defines_print();
+
+	if (verbose)
+		printf("Declared %d words of storage\n", n_words);
+
+	fclose(header_file);
 
 	do_ftcode();
 	fclose(ft_file);
