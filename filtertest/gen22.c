@@ -578,7 +578,9 @@ do_buf(int b)
 						f = (i + fbase) % n_f;
 						emit_store2(f, i+1, c);
 						f = (n_f  - 1 - i + fbase) % n_f;
-						emit_store2(f, i+n_coef, c);
+						// optimize out the last store
+						if (i < n_f/2-1)
+							emit_store2(f, i+n_coef, c);
 					}
 
 					// Sum up filter 'f' and spit it out
@@ -597,7 +599,11 @@ do_buf(int b)
 						emit_reference(2, f, i, c);
 						sprintf(lbuf, " + ");
 						output_lines_string(lbuf);
-						emit_reference(2, f, i + n_coef - 1, c);
+						if (i == n_coef-1)
+							// the last store was optimized out, but data is in 'v'
+							output_lines_string("v");
+						else
+							emit_reference(2, f, i + n_coef - 1, c);
 						sprintf(lbuf, ")");
 						output_lines_string(lbuf);
 					}
