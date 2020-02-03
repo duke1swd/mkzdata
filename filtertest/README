@@ -1,2 +1,8 @@
 This directory contains code to test various implementations of digital filter algorithms.
 This code is intended to run on a Linux box, not on the mkrzero.
+
+Gen22 is a program that writes filter code in an unrolled loop.
+That code will be run on the mkrzero, but it is also used in filtertest, to test it out.
+
+There are minor optimizations that could be made to the output of gen22,
+but I am trusting even a moderately smart compiler can make the optimizations.
