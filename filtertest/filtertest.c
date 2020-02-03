@@ -80,7 +80,7 @@ struct input_type_s {
 static void
 set_defaults()
 {
-	filter_size = 17;
+	filter_size = GENERATED_FILTER_SIZE;
 	input_type_name = "sqwave";
 	input_frequency = 1000;
 	adc_frequency = 35714;
