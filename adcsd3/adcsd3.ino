@@ -7,6 +7,24 @@
    which we write to the SD card.
    These are written in a packed 12-bit format.
    Output data rate is about 107,000 bytes/sec
+
+   The analog data is filtered and down-sampled 4x.  The down-sampling
+   is done in 2 stages, and the data is filtered each time.  The two
+   filter stages use identical coefficients.
+
+   The filters are convolved and unrolled for maximum efficiency.  The
+   code to define and impement the filters is created by gen22.c and
+   included here.
+
+   Each sample is 12 bits, stored in a 16-bit word, right justified.
+
+   Because of the way the pins are laid out and connected in order to get
+   the adc sampling feature to scan 6 pins we need to scan 2 pins that
+   are not connected.  The values from those pins are loaded into memory
+   but never used.  See the definition of struct sample_s in filter_defines.h
+
+   The term "block" in this code usually means the amount of data we get
+   per DMA complete interrupt.
 */
 
 #define IL_LOGGING 1
@@ -17,60 +35,7 @@
 #include <SPI.h>
 #include <SD.h>
 
-
-// Each data point is 16 bits.  Each sample is one point from each of 8 channels
-// A sample is 16 bytes
-struct sample_s {
-  uint16_t c0;		// Pin A3
-  uint16_t c1;		// Pin A4
-  uint16_t c2;		// Pin A5
-  uint16_t c3;		// Pin A6
-  uint16_t null0;	// This pin is not wired to anything
-  uint16_t null1;	// This pin is not wired to anything
-  uint16_t c4;		// Pin A1
-  uint16_t c5;		// Pin A2
-};
-
-
-// A block is the amount we DMA before we interrupt
-// For now it is 16 samples.  Since we are doing a 16-input filter, this is the minimum we can do
-// and guarantee that the filter needs inputs from only 2 buffers.
-// A block is 16*16 = 256 bytes
-// We keep three blocks in memory, so 768B of memory
-// Tagged as volatile because these are written by DMA, read by CPU
-volatile struct adc_block_s {
-  struct sample_s s0;
-  struct sample_s s1;
-  struct sample_s s2;
-  struct sample_s s3;
-  struct sample_s s4;
-  struct sample_s s5;
-  struct sample_s s6;
-  struct sample_s s7;
-  struct sample_s s8;
-  struct sample_s s9;
-  struct sample_s s10;
-  struct sample_s s11;
-  struct sample_s s12;
-  struct sample_s s13;
-  struct sample_s s14;
-  struct sample_s s15;
-} adc_b0, adc_b1, adc_b2, adc_bad;
-
-// The filter takes 16 inputs.  It should have 16 coefficients, but we assume
-// the filter is symmetric, so the first and last coeeficient are the same, etc.
-// The floating point values are scaled by 2^16 to make the integer part of the
-// result in the high order 16 bits.  Then scaled by 2^4 because we are taking
-// 12-bit numbers as input and want 16-bit numbers as output
-#define	C_CONV(v) ((uint32_t)((v) * (double)(1<<20)))
-#define	C7	C_CONV(1./3.)
-#define	C6	C_CONV(1./9.)
-#define	C5	C_CONV(1./27.)
-#define	C4	C_CONV(1./81.)
-#define	C3	C_CONV(1./243.)
-#define	C2	C_CONV(1./729.)
-#define	C1	C_CONV(1./2187.)
-#define	C0	C_CONV(1./6561.)
+#include "filter_defines.h"
 
 // Each output block has a header.
 struct header_s {
@@ -93,9 +58,10 @@ struct header_s {
 
 
 #define	HEADER_SIZE		(sizeof (struct header_s) / sizeof (uint16_t))
-#define	N_OUTPUT_BUFFERS	24
+#define	N_OUTPUT_BUFFERS	16
 #define	OUTPUT_BUFFER_SIZE	512	// in 16-bit words
-#define	ADC_BLOCKS_PER_BUFFER	((OUTPUT_BUFFER_SIZE - HEADER_SIZE) / 24)
+#define	OUTPUTS_PER_BLOCK	(GENERATED_SAMPLES_PER_BLOCK * GENERATED_CHANNELS / 4)
+#define	ADC_BLOCKS_PER_BUFFER	((OUTPUT_BUFFER_SIZE - HEADER_SIZE) / OUTPUTS_PER_BLOCK)
 
 volatile uint8_t buffer_status[N_OUTPUT_BUFFERS];
 #define	EMPTY 		0
@@ -155,6 +121,7 @@ typedef struct {
   uint32_t dstaddr;
   uint32_t descaddr;
 } dmacdescriptor ;
+
 volatile dmacdescriptor wrb[N_DMA_CHANNELS] __attribute__ ((aligned (16)));	// this is a region in memory where the descriptors will be written back.
 dmacdescriptor descriptor_section[N_DMA_CHANNELS] __attribute__ ((aligned (16)));// the source descriptors
 dmacdescriptor descriptor __attribute__ ((aligned (16)));		// a single descriptor used temp
@@ -165,6 +132,9 @@ dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descript
 #define	BFD_0	((uint32_t)(&adc_b1) + sizeof adc_b1)
 #define	BFD_1	((uint32_t)(&adc_b2) + sizeof adc_b2)
 
+/*
+ * Debugging print routine.
+ */
 void print_buffer(volatile struct adc_block_s *p) {
   int i;
   uint16_t *q;
@@ -180,8 +150,8 @@ void print_buffer(volatile struct adc_block_s *p) {
 }
 
 /*
-   Set up the buffer we are about to write to.
-*/
+ * Set up the buffer we are about to write to.
+ */
 void init_buffer() {
   uint32_t t;
   struct header_s *h_p;
@@ -221,12 +191,19 @@ volatile uint32_t dmadone;
 volatile uint32_t cpu_c;
 
 /*
- * Override the library definition of the DMAC interrupt ISR
- */
+   This is the DMA controller interrupt handler.
+   THis definition overrides the definition in the arduino core libraries.
+   We handle these interrupts
+ 	DMAC_CHINTENCLR_TERR		transfer error
+ 	DMAC_CHINTENCLR_TCMPL		transfer complete
+ 	DMAC_CHINTENCLR_SUSP		DMA suspended
+*/
 void DMAC_Handler() {
   int i;
+  int v;
   int next_buffer;
   uint32_t bf_desc;
+  int buffer_selector;
 
   // interrupts DMAC_CHINTENCLR_TERR DMAC_CHINTENCLR_TCMPL DMAC_CHINTENCLR_SUSP
   // These are transfer error, transfer complete, and DMA suspended
@@ -249,8 +226,22 @@ void DMAC_Handler() {
 
   // which descriptor are we using?
   bf_desc = wrb[0].dstaddr;
-#include "reduce.h"
+
+  // which descriptor are we using?
+  bf_desc = wrb[0].dstaddr;
+  buffer_selector = 99;
+  if (bf_desc == BFD_0)
+    buffer_selector = 0;
+  else if (bf_desc == BFD_1)
+    buffer_selector = 1;
+  else if (bf_desc == BFD_2)
+    buffer_selector = 2;
+
+  // Filter the input buffers into the output buffers
+#if 0
+#include "filter_code.h"
   else reduce_errors++;
+#endif
 
   if (--output_counter <= 0) {
     buffers_filled++;
@@ -437,8 +428,8 @@ void adc_init() {
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
 
-  // DIV32 give us a 1.5 MHz ADC_CLK.  Legal max is 2.1 MHz.  After downsampling 4x
-  // this will give us about 10K samples/sec/channel, assuming 6 channels.
+  // The input clock is 8MHz.  We scale by 4x to get 2.0 MHz.  Max allowed is 2.1MHz,
+  // but I don't see an easy way to generate that.
   ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV4 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
 }
@@ -684,7 +675,7 @@ void loop() {
   if (now <= end_time && buffer_status[dump_buffer] == FULL) {
     buffer_status[dump_buffer] = EMPTYING;
     tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
-#if 0
+#if 1
     n = OUTPUT_BUFFER_SIZE * sizeof (uint16_t);
 #else
     n = dataFile.write((char*)(buffers[dump_buffer]), OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
@@ -713,10 +704,12 @@ void loop() {
     Serial.println(errors);
     Serial.print("Total Time (sec): ");
     Serial.println((double)(now - start_time) / 1000000.);
+    Serial.print("Blocks per buffer: ");
+    Serial.println(ADC_BLOCKS_PER_BUFFER);
     Serial.print("Input samples/sec/channel: ");
-    Serial.println((double)(buffers_written * ADC_BLOCKS_PER_BUFFER * 16) * 1000000. / ((double)(now - start_time)));
+    Serial.println((double)(buffers_written * ADC_BLOCKS_PER_BUFFER * GENERATED_SAMPLES_PER_BLOCK) * 1000000. / ((double)(now - start_time)));
     Serial.print("Output samples/sec/channel: ");
-    Serial.println((double)(buffers_written * ADC_BLOCKS_PER_BUFFER * 4) * 1000000. / ((double)(now - start_time)));
+    Serial.println((double)(buffers_written * ADC_BLOCKS_PER_BUFFER * GENERATED_SAMPLES_PER_BLOCK / 4) * 1000000. / ((double)(now - start_time)));
     Serial.print("Output bytes/sec: ");
     Serial.println((double)(buffers_written * OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) * 1000000. / ((double)(now - start_time)));
     Serial.print("Max Delta: ");
