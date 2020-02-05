@@ -77,7 +77,7 @@ static void
 set_defaults()
 {
 	n_buffers = 3;
-	n_chan = 1;
+	n_chan = 6;
 	fw = 9;
 	buffer_prefix = "adc_b";
 	f1_prefix = "f1";
@@ -373,7 +373,13 @@ do_headers()
 
 	n_words = 0;
 
-	fprintf(header_file, "#define GENERATED_FILTER_SIZE %d\n\n", fw);
+	words_per_sample = n_chan;
+	if (n_chan > 4)
+		words_per_sample += 2;
+
+	fprintf(header_file, "#define GENERATED_FILTER_SIZE %d\n", fw);
+	fprintf(header_file, "#define GENERATED_CHANNELS %d\n", n_chan);
+	fprintf(header_file, "#define GENERATED_SAMPLES_PER_BLOCK %d\n\n", n_samp);
 
 	// Define the filter coefficients
 	print_constant(0, cvalues[0]);
@@ -395,9 +401,6 @@ do_headers()
 				i);
 	}
 	fprintf(header_file, "};\n\n");
-	words_per_sample = n_chan;
-	if (n_chan > 4)
-		words_per_sample += 2;
 
 	// Define an input buffer
 	fprintf(header_file, "struct adc_block_s {\n");
