@@ -4,7 +4,7 @@
    The program is built around the assumption we are scanning 6 analog pins.
 
    The analog data is filtered and down-sampled 4x.  The down-sampling
-   is done in 2 staged, and the data is filtered each time.  The two 
+   is done in 2 staged, and the data is filtered each time.  The two
    filter stages use identical coefficients.
 
    The filters are convolved and unrolled for maximum efficiency.  The
@@ -26,7 +26,7 @@
 
 // These defines measure things in samples, i.e. uint16_t, not bytes
 
-				// 24 outputs per DMA interrupt
+// 24 outputs per DMA interrupt
 #define	OUTPUTS_PER_BLOCK	(GENERATED_SAMPLES_PER_BLOCK * GENERATED_CHANNELS / 4)
 #define	HEADER_SIZE		4	// reserve 4 * 16 = 2 * 32 bits for header
 #define	N_OUTPUT_BUFFERS	2
@@ -86,8 +86,8 @@ dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descript
 #define	BFD_1	((uint32_t)(&adc_b2) + sizeof adc_b2)
 
 /*
- * Debugging routine to print a data buffer
- */
+   Debugging routine to print a data buffer
+*/
 void print_buffer(volatile struct adc_block_s *p) {
   int i;
   uint16_t *q;
@@ -103,8 +103,8 @@ void print_buffer(volatile struct adc_block_s *p) {
 }
 
 /*
- * When we switch to a new output buffer, perform necessary intialization.
- */
+   When we switch to a new output buffer, perform necessary intialization.
+*/
 void init_buffer() {
   uint32_t t;
   buffer_status[current_buffer] = FILLING;
@@ -123,15 +123,16 @@ volatile uint32_t dmadone;
 volatile uint32_t cpu_c;
 
 /*
- * This is the DMA controller interrupt handler.
- * THis definition overrides the definition in the arduino core libraries.
- * We handle these interrupts
- *	DMAC_CHINTENCLR_TERR		transfer error
- *	DMAC_CHINTENCLR_TCMPL		transfer complete
- *	DMAC_CHINTENCLR_SUSP		DMA suspended
- */
+   This is the DMA controller interrupt handler.
+   THis definition overrides the definition in the arduino core libraries.
+   We handle these interrupts
+ 	DMAC_CHINTENCLR_TERR		transfer error
+ 	DMAC_CHINTENCLR_TCMPL		transfer complete
+ 	DMAC_CHINTENCLR_SUSP		DMA suspended
+*/
 void DMAC_Handler() {
   int i;
+  int v;
   uint32_t bf_desc;
   uint8_t active_channel;
   int buffer_selector;
@@ -153,11 +154,11 @@ void DMAC_Handler() {
   bf_desc = wrb[0].dstaddr;
   buffer_selector = 99;
   if (bf_desc == BFD_0)
-	buffer_selector = 0;
-else if (bf_desc == BFD_1)
-	buffer_selector = 1;
-else if (bf_desc == BFD_2)
-	buffer_selector = 2;
+    buffer_selector = 0;
+  else if (bf_desc == BFD_1)
+    buffer_selector = 1;
+  else if (bf_desc == BFD_2)
+    buffer_selector = 2;
 
   // Filter the input buffers into the output buffers
 #include "filter_code.h"
@@ -205,8 +206,8 @@ void dma_init() {
 }
 
 /*
- * This routine turns on the ADC and kicks off the DMA of the ADC.
- */
+   This routine turns on the ADC and kicks off the DMA of the ADC.
+*/
 void adc_dma() {
   uint32_t temp_CHCTRLB_reg;
   int i, j;
@@ -308,7 +309,7 @@ void adc_init() {
   // first pin to scan
   itemp = g_APinDescription[ADCPIN0].ulADCChannelNumber << ADC_INPUTCTRL_MUXPOS_Pos;
   // Scan the pins
-  itemp |= ADC_INPUTCTRL_INPUTSCAN(NPINS-1);
+  itemp |= ADC_INPUTCTRL_INPUTSCAN(NPINS - 1);
   // set the gain
   itemp |= ADC_INPUTCTRL_GAIN_1X;
   // set the INPUTRCTRL register
