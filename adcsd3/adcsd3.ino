@@ -28,6 +28,7 @@
 */
 
 #define IL_LOGGING 1
+#undef IL_LOGGING
 
 #define	DURATION	(30ul * 1000000ul)	// in microseconds
 
@@ -133,8 +134,8 @@ dmacdescriptor descriptor3 __attribute__ ((aligned (16)));		// a single descript
 #define	BFD_1	((uint32_t)(&adc_b2) + sizeof adc_b2)
 
 /*
- * Debugging print routine.
- */
+   Debugging print routine.
+*/
 void print_buffer(volatile struct adc_block_s *p) {
   int i;
   uint16_t *q;
@@ -150,8 +151,8 @@ void print_buffer(volatile struct adc_block_s *p) {
 }
 
 /*
- * Set up the buffer we are about to write to.
- */
+   Set up the buffer we are about to write to.
+*/
 void init_buffer() {
   uint32_t t;
   struct header_s *h_p;
@@ -238,7 +239,7 @@ void DMAC_Handler() {
     buffer_selector = 2;
 
   // Filter the input buffers into the output buffers
-#if 0
+#if 1
 #include "filter_code.h"
   else reduce_errors++;
 #endif
@@ -351,8 +352,6 @@ void adc_dma() {
   current_buffer = 0;
   reduce_errors = 0;
   init_buffer();
-  Serial.print("init output count: ");
-  Serial.println(output_counter);
 
   // start channel
 #ifdef IL_LOGGING
@@ -441,9 +440,9 @@ void adc_start() {
 
 
 /*
- * Timer Management Code Here
- * The timer is used to drive the control loop at 500Hz
- */
+   Timer Management Code Here
+   The timer is used to drive the control loop at 500Hz
+*/
 #define CTRL_TC         TC5
 #define CTRL_TC_IRQn    TC5_IRQn
 #define CTRL_TC_TOP     0xFFFF
@@ -465,10 +464,10 @@ static inline void resetTC (Tc* TCx)
 }
 
 /*
- * Interrupt priorities:
- * I believe that DMA is on 0 (high), USB is on 0 (high) and systick is on 2 (low).
- * So this should put us below DMAC (good), below USB (OK, I guess), and above systick (ok)
- */
+   Interrupt priorities:
+   I believe that DMA is on 0 (high), USB is on 0 (high) and systick is on 2 (low).
+   So this should put us below DMAC (good), below USB (OK, I guess), and above systick (ok)
+*/
 #define CTRL_TC_NVIC_PRIORITY ((1<<__NVIC_PRIO_BITS) - 1)
 
 void start_control_loop()
@@ -476,9 +475,9 @@ void start_control_loop()
   // Configure interrupt request
   NVIC_DisableIRQ(CTRL_TC_IRQn);
   NVIC_ClearPendingIRQ(CTRL_TC_IRQn);
-  
+
   NVIC_SetPriority (CTRL_TC_IRQn, CTRL_TC_NVIC_PRIORITY);  /* set Priority */
-      
+
   // Enable GCLK for TC4 and TC5 (timer counter input clock)
   GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5));
   while (GCLK->STATUS.bit.SYNCBUSY);
@@ -501,7 +500,7 @@ void start_control_loop()
   // Enable CTRL_TC
   CTRL_TC->COUNT16.CTRLA.reg |= TC_CTRLA_ENABLE;
   WAIT_TC16_REGS_SYNC(CTRL_TC)
-  
+
   NVIC_EnableIRQ(CTRL_TC_IRQn);
 }
 
@@ -515,9 +514,9 @@ extern "C" {
 void TC5_Handler (void)
 {
 
-    // Clear the interrupt
-    CTRL_TC->COUNT16.INTFLAG.bit.MC0 = 1;
-    myLoop();
+  // Clear the interrupt
+  CTRL_TC->COUNT16.INTFLAG.bit.MC0 = 1;
+  myLoop();
 }
 
 #ifdef __cplusplus
@@ -676,9 +675,9 @@ void loop() {
     buffer_status[dump_buffer] = EMPTYING;
     tbs = total_skipped; // Note that total_skipped is volatile and may continue to increment after this point.
 #if 1
-    n = OUTPUT_BUFFER_SIZE * sizeof (uint16_t);
-#else
     n = dataFile.write((char*)(buffers[dump_buffer]), OUTPUT_BUFFER_SIZE * sizeof (uint16_t));
+#else
+    n = OUTPUT_BUFFER_SIZE * sizeof (uint16_t);
 #endif
     buffer_status[dump_buffer] = EMPTY;
     if (n != OUTPUT_BUFFER_SIZE * sizeof (uint16_t)) {
@@ -694,6 +693,8 @@ void loop() {
     dataFile.close();
     printed++;
     Serial.println("Done");
+    Serial.print("FIlter width: ");
+    Serial.println(GENERATED_FILTER_SIZE);
     Serial.print("Buffers written: ");
     Serial.println(buffers_written);
     Serial.print("Buffers filled: ");
@@ -729,19 +730,19 @@ void loop() {
 }
 
 /*
- * Warning: this loop function is called from within the TC5 ISR.
- * Keep it brief!
- * As dummy load, this routine blinks the LED and consumes 10.1% of the CPU.
- */
+   Warning: this loop function is called from within the TC5 ISR.
+   Keep it brief!
+   As dummy load, this routine blinks the LED and consumes 10.1% of the CPU.
+*/
 static void myLoop() {
   count_clicks++;
   if (divider++ >= DIVIDE_VAL) {
-   divider = 0;
-   if (led_val == HIGH)
-    led_val = LOW;
-   else
-    led_val = HIGH;
-   digitalWrite(LED_PIN, led_val);
+    divider = 0;
+    if (led_val == HIGH)
+      led_val = LOW;
+    else
+      led_val = HIGH;
+    digitalWrite(LED_PIN, led_val);
   }
   delayMicroseconds(400); /// 200 == 10% of the CPU
 }

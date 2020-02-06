@@ -78,7 +78,7 @@ set_defaults()
 {
 	n_buffers = 3;
 	n_chan = 6;
-	fw = 9;
+	fw = 13;
 	buffer_prefix = "adc_b";
 	f1_prefix = "f1";
 	f2_prefix = "f2";
@@ -86,8 +86,8 @@ set_defaults()
 	channel_prefix = "c";
 	coefficient_prefix = "C";
 	output_pointer_name = "output_pointer";
-	word_type = "uint16_t";	// for mkrzero
 	word_type = "int";	// for filter test
+	word_type = "uint16_t";	// for mkrzero
 	header_file_name = "filter_defines.h";
 	code_file_name = "filter_code.h";
 	ft_file_name = "filter_test_code.h";
