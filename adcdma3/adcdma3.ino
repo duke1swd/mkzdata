@@ -51,6 +51,7 @@ int reduce_errors;
 #define ADCPIN5 A2
 #define NPINS 8
 #define	N_DMA_CHANNELS 1		// This is the number of DMA channels we use.  There are 12, but we don't use them all.
+#define	MY_GENERIC_CLOCK 4u
 
 // Interrupt logging stuff
 #define	IL_MAX	16
@@ -319,10 +320,31 @@ void adc_init() {
   ADC->SAMPCTRL.reg = 0x00;  ; //sample length in 1/2 CLK_ADC cycles
   ADCsync();
 
-  // DIV32 give us a 1.5 MHz ADC_CLK.  Legal max is 2.1 MHz.  After downsampling 4x
-  // this will give us about 10K samples/sec/channel, assuming 6 channels.
-  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV32 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
+  // The input clock is 8MHz.  We scale by 4x to get 2.0 MHz.  Max allowed is 2.1MHz,
+  // but I don't see an easy way to generate that.
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV4 | ADC_CTRLB_FREERUN | ADC_CTRLB_RESSEL_12BIT;
   ADCsync();
+}
+
+/*
+   This code sets up generic clock #4 to run at 8.0MHz
+*/
+void gclk4() {
+  GCLK->GENDIV.reg = GCLK_GENDIV_ID(MY_GENERIC_CLOCK) |	// Generic Clock Generator 4
+                     GCLK_GENDIV_DIV(6);		// divide the clock by 6 to generate 8 MHz.
+
+  while (GCLK->STATUS.bit.SYNCBUSY == 1); // Wait for synchronization
+
+  /* Write Generic Clock Generator 4 configuration */
+  GCLK->GENCTRL.reg = GCLK_GENCTRL_ID( MY_GENERIC_CLOCK ) | // Generic Clock Generator 4
+                      GCLK_GENCTRL_SRC_DFLL48M | // Selected source is DFLL 48MHz
+                      GCLK_GENCTRL_IDC | // Set 50/50 duty cycle
+                      GCLK_GENCTRL_GENEN ;
+  while (GCLK->STATUS.bit.SYNCBUSY == 1); // Wait for synchronization
+
+  /* Route this clock to the ADC_CLK */
+  GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN(MY_GENERIC_CLOCK) | GCLK_CLKCTRL_ID_ADC);
+  while ( GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY ) ; // Wait for synchronization
 }
 
 void adc_start() {
@@ -401,7 +423,8 @@ void setup() {
   while (!Serial) ;
   Serial.println("Hello World");
   measure("idle cpu");
-
+  gclk4();
+  Serial.println("GLCK 4 set up");
   dma_init();
   Serial.println("dma_init complete");
   adc_init();

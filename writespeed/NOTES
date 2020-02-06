@@ -1,0 +1,52 @@
+Buffer size is 512
+Data rate 162.53 KB/sec
+Data rate 3.15 millseconds/buffer
+Max write time: 11.52 milliseconds
+44.44
+
+Buffer size is 1024
+Data rate 162.71 KB/sec
+Data rate 6.29 millseconds/buffer
+Max write time: 18.97 milliseconds
+53.97
+
+Buffer size is 2048
+Data rate 162.77 KB/sec
+Data rate 12.58 millseconds/buffer
+Max write time: 21.22 milliseconds
+96.51
+
+Buffer size is 4096
+Data rate 162.40 KB/sec
+Data rate 25.22 millseconds/buffer
+Max write time: 41.51 milliseconds
+98.67
+
+Buffer size is 8192
+Data rate 162.86 KB/sec
+Data rate 50.30 millseconds/buffer
+Max write time: 61.86 milliseconds
+132.42
+
+Buffer size is 16384
+Data rate 162.91 KB/sec
+Data rate 100.57 millseconds/buffer
+Max write time: 109.52 milliseconds
+149.59
+
+Assume we can hit 150,000 bytes/sec.
+This is 16,666 samples/sec on each of 6 channels, if we pack them.
+Or we could not pack them, in which case it is 12,500 per second.
+If we downsample 4x, we get 14-bit resolution at 12.5K samples/second
+
+
+If we measure across multiple buffers, it appears we can consistently get 140,000 bytes/second using 48 buffers of 512 bytes each
+Minimum block overhead is 4 bytes per buffer. Assume 512-byte buffer
+This gives us an 8-byte header and 56 sets of packed data
+Do the math, we get 15312.08 samples/sec/channel, packed
+
+
+Given that ADC speeds are quantized, I think that means we run 12.5K, no downsampling.
+If we could build a fancy filter, we could run 50K at 4x downsampling, I suspect we lack CPU.
+
+So, first attempt will be 12.5K, no downsampling, but yes packing

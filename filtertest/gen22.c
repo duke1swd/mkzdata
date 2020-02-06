@@ -78,7 +78,7 @@ set_defaults()
 {
 	n_buffers = 3;
 	n_chan = 6;
-	fw = 13;
+	fw = 17;
 	buffer_prefix = "adc_b";
 	f1_prefix = "f1";
 	f2_prefix = "f2";
