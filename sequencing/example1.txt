@@ -1,0 +1,290 @@
+#
+# Simple Igniter Sequence
+#
+
+#
+# Pressure Sensors
+#
+# All 3 pressure sensors are identical
+# Each reads 0 PSI at 0.5V and 500 PSI at 4.5V on a 5V scale
+
+define ChamberPressure PressureInput2
+	property ChamberPressure analogmin 1638
+	property ChamberPressure analogmax 14746
+	property ChamberPressure psimin 0
+	property ChamberPressure psimax 500
+define N2OPressure PressureInput0
+	property N2OPressure analogmin 1638
+	property N2OPressure analogmax 14746
+	property N2OPressure psimin 0
+	property N2OPressure psimax 500
+define IPAPressure PressureInput1
+	property IPAPressure analogmin 1638
+	property IPAPressure analogmax 14746
+	property IPAPressure psimin 0
+	property IPAPressure psimax 500
+
+#
+# Other inputs
+#
+define CommandGo LogicalInput0
+	property CommandGo inverted true
+	Property CommandGo debounce true
+define CommandAbort LogicalInput1
+	property CommandAbort inverted true
+
+define SafeSwitch LogicalInput2
+	property SafeSwitch inverted true
+	Property SafeSwitch debounce true
+
+#
+# OUTPUTS
+#
+# The outputs include the valves, the spark generator,
+# and the two LEDs
+#
+define N2OValve LogicalOutput0
+define IPAValve LogicalOutput1
+define Spark LogicalOutput2
+define WarningLED LEDOutput1
+	property WarningLED inverted
+define ReadyLED LEDOutput0
+	property ReadyLED inverted
+
+#
+# Startup state.
+#  Check pressure sensors sane.
+#  Check safe switch off
+#  Wait for “GO”
+#
+state startup
+entry
+	set WarningLED off
+	set ReadyLED on
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+exit
+	set WarningLED on
+	Set ReadyLED off
+test ReadyErrorChamber
+	if ChamberPressure > 0
+test ReadyErrorN2O
+	if N2OPressure < 300
+test ReadyErrorN2O
+	if N2OPressure > 800
+test ReadyErrorIPA
+	if IPAPressure < 300
+test ReadyErrorIPA
+	if IPAPressure > 400
+test Abort
+	if CommandAbort true
+test WaitForSafe
+	if SafeSwitch true
+test Run1
+	if CommandGo true
+
+#
+# Various error states.  They all log an error and terminate
+#
+state ReadyErrorChamber
+entry
+	print “C-press”
+test final
+	immediate
+
+state ReadyErrorN2O
+entry
+	print "N2O-press"
+test final
+	immediate
+
+state ReadyErrorIPA
+	print "IPA-press"
+test final
+	immediate
+
+state Abort
+entry
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+	set WarningLED on
+	set ReadyLED off
+exit
+	print "CMD ABORT"
+test final
+	immediate
+
+#
+# Started up with safe switch set to safe.
+# Wait for it, while blinking the warning LED
+#
+state WaitForSafe
+entry
+	set ReadyLED off
+	set WarningLED blink
+exit
+	set ReadyLED on
+	set WarningLED off
+test startup
+	if SafeSwitch false
+
+#
+# Run the test.  Pressure sensors verified sane, safe/arm is armed, commanded to GO
+# In this first state, turn on spark and IPA, then wait 25 milliseconds
+#
+state Run1
+entry
+	set WarningLED off
+	set ReadyLED blink
+	set IPAValve on
+	set N2OValve off
+	set Spark on
+	mark RunStart
+exit
+	set WarningLED on
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+# abort on abort command or safe switch
+test Abort
+	if CommandAbort true
+test Abort
+	if SafeSwith true
+
+# on to the next state after 25 milliseconds
+test Run2
+	if RunStart > 24
+
+#
+# Run2 -- turn on the N2o and wait for good chamber pressure
+#
+state Run2
+entry
+	set WarningLED off
+	set ReadyLED blink
+	set IPAValve on
+	set N2OValve on
+	set Spark on
+exit
+	set WarningLED on
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+
+# abort on abort command or safe switch
+test Abort
+	if CommandAbort true
+test Abort
+	if SafeSwith true
+# if we've waited more than 200 milliseconds, give up
+test NoFire
+	if RunStart > 224
+test Run3
+	if ChamberPressure > 50
+
+#
+# Run 3 -- chamber pressure is up, does it stay up?
+#
+state Run3
+entry
+	set WarningLED off
+	set ReadyLED blink
+	set IPAValve on
+	set N2OValve on
+	set Spark on
+	mark GoodChamber
+exit
+	set WarningLED on
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+
+# abort on abort command or safe switch
+test Abort
+	if CommandAbort true
+test Abort
+	if SafeSwith true
+# if chamber pressure drops too low, go back to waiting for it
+test Run2
+	if ChamberPressure < 45
+test Run4
+	if GoodChamber > 49
+
+
+#
+# Run 4 -- chamber pressure is stable.  Run for another 750 milliseconds
+#
+state Run4
+entry
+	set WarningLED off
+	set ReadyLED blink
+	set IPAValve on
+	set N2OValve on
+	set Spark on
+	mark GoodChamber
+exit
+	set WarningLED on
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+
+# abort on abort command or safe switch
+test Abort
+	if CommandAbort true
+test Abort
+	if SafeSwith true
+# if we've been in this state for 750 milliseconds then we are done!
+test Done
+	if GoodChamber > 749
+# if chamber pressure drops too low, abort
+test FireOut
+	if ChamberPressure < 45
+
+#
+# The following states are various ways for the test to end
+# 
+state Done
+entry
+	set WarningLED off
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+	print "Success!"
+test final
+	immediate
+
+state FireOut
+entry
+	set WarningLED on
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+	print "Flame Out!"
+test final
+	immediate
+
+state NoFire
+entry
+	set WarningLED on
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
+	print "No Flame!"
+test final
+	immediate
+
+state final
+entry
+	set ReadyLED off
+	set IPAValve off
+	set N2OValve off
+	set Spark off
