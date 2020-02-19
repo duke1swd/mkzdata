@@ -21,6 +21,9 @@
 #include <string.h>
 #include <math.h>
 
+typedef short int16_t;
+typedef unsigned short uint16_t;
+
 #define	MAX_SAMPLES	(1000*1000)
 #define TWOPI		(2. * 3.14159265359)
 #define	FILTER_SIZE_MAX	65
@@ -60,12 +63,12 @@ double wa1;
 double fresp_min, fresp_max;
 int fresp_points;
 
-int	cvalues[FILTER_SIZE_MAX];
-int16_t	samples[MAX_SAMPLES];
-int16_t	halfsamp[MAX_SAMPLES/2];
-int16_t	output[N_OUTPUTS][MAX_SAMPLES/4+FILTER_SIZE_MAX];
-int16_t	first_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
-int16_t	second_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
+int		cvalues[FILTER_SIZE_MAX];
+uint16_t	samples[MAX_SAMPLES];
+int16_t		halfsamp[MAX_SAMPLES/2];
+int16_t		output[N_OUTPUTS][MAX_SAMPLES/4+FILTER_SIZE_MAX];
+int16_t		first_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
+int16_t		second_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
 
 struct input_type_s {
 	enum input_types_e itype;
@@ -274,6 +277,13 @@ i_found:
 		errors++;
 	}
 
+	if (GENERATED_CHANNELS != 1) {
+		fprintf(stderr, "%s: generated channels (%d) must be set to 1 in gen22.c\n",
+				myname,
+				GENERATED_CHANNELS);
+		errors++;
+	}
+
 	nargs = argc - optind;
 
 	if (nargs && input_type != file) {
@@ -397,7 +407,7 @@ static void gen_coefficients(int *coefficients,
 		for (i = 0; i <= (N-1)/2; i++)
 			printf("\t%2d %.5f %4d\n",
 					i,
-					(double)coefficients[i] / (double)0x10000,
+					(double)coefficients[i] / (double)scaleone,
 					coefficients[i]);
 	}
 }
@@ -426,13 +436,29 @@ simple2x(int16_t *input, int16_t *output, int n)
 }
 
 static void
+print_average(int16_t *s, int n)
+{
+	int acc;
+	int count;
+
+	count = n;
+
+	for (acc = 0; n-- > 0; acc += *s++) ;
+
+	printf("half average = %.1f\n", (double)acc / (double)count);
+}
+
+
+static void
 simple_filter()
 {
 	if (verbose) {
 		printf("Running simple filter\n");
 		fflush(stdout);
 	}
-	simple2x(samples, halfsamp, sample_size);
+	simple2x((int16_t *)samples, halfsamp, sample_size);
+	if (debug)
+		print_average(halfsamp, (sample_size - filter_size)/2 + 1);
 	simple2x(halfsamp, output[SIMPLE_FILTER_OUTPUT], (sample_size - filter_size)/2 + 1);
 }
 
@@ -652,7 +678,7 @@ doit()
 		printf("Filter width = %d\n", filter_size);
 
 	// Create the filter coefficients
-	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, 1.);
+	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, GENERATED_GAIN);
 
 	// Get the input data.
 	switch (input_type) {

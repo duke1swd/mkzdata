@@ -20,6 +20,7 @@ char *myname;
 int n_buffers;	// input buffers.  Need at least 3, I think
 int n_chan;	// input channels.  Plan is 6 ADC channels
 int fw;		// nominal filter width.  Needs to be 5, 9, or 13
+double gain;	// Filter gain, per stage.
 
 char *buffer_prefix;
 char *f1_prefix;
@@ -28,7 +29,8 @@ char *sample_prefix;
 char *channel_prefix;
 char *coefficient_prefix;
 char *output_pointer_name;
-char *word_type;	// all input, output and intermediates are this type
+char *i_word_type;	// all inputs are this type
+char *o_word_type;	// all output and intermediates are this type
 char *header_file_name;
 char *code_file_name;
 char *ft_file_name;
@@ -77,8 +79,9 @@ static void
 set_defaults()
 {
 	n_buffers = 3;
-	n_chan = 6;
-	fw = 17;
+	n_chan = 1;
+	fw = 13;
+	gain = 2.;
 	buffer_prefix = "adc_b";
 	f1_prefix = "f1";
 	f2_prefix = "f2";
@@ -86,8 +89,8 @@ set_defaults()
 	channel_prefix = "c";
 	coefficient_prefix = "C";
 	output_pointer_name = "output_pointer";
-	word_type = "int";	// for filter test
-	word_type = "uint16_t";	// for mkrzero
+	i_word_type = "uint16_t";
+	o_word_type = "int16_t";
 	header_file_name = "filter_defines.h";
 	code_file_name = "filter_code.h";
 	ft_file_name = "filter_test_code.h";
@@ -196,7 +199,7 @@ static void gen_coefficients(int *coefficients,
 		int N,
 		double windowa0,
 		double windowa1,
-		double gain)
+		double g)
 {
 	int i;
 	double sum;
@@ -210,7 +213,7 @@ static void gen_coefficients(int *coefficients,
 	// Normalize the sum to 1.0 * gain, then scale and truncate to integer
 	for (i = 0; i <= (N-1)/2; i++)
 		coefficients[i] = (int)(gen_coef(i, foverfs, N, windowa0, windowa1) *
-			gain / sum * scaleone);
+			g / sum * scaleone);
 
 	if (debug > 1) {
 		printf("\nCoefficients:\n");
@@ -352,7 +355,7 @@ output_defines_print()
 	for (p = output_defines_table, i = 0; i < output_defines_table_length; i++, p++)
 		if (p->status) {
 			fprintf(header_file, "static %s %s;\n",
-					word_type,
+					o_word_type,
 					p->name);
 			n_words++;
 		}
@@ -379,7 +382,8 @@ do_headers()
 
 	fprintf(header_file, "#define GENERATED_FILTER_SIZE %d\n", fw);
 	fprintf(header_file, "#define GENERATED_CHANNELS %d\n", n_chan);
-	fprintf(header_file, "#define GENERATED_SAMPLES_PER_BLOCK %d\n\n", n_samp);
+	fprintf(header_file, "#define GENERATED_SAMPLES_PER_BLOCK %d\n", n_samp);
+	fprintf(header_file, "#define GENERATED_GAIN %.1f\n\n", gain);
 
 	// Define the filter coefficients
 	print_constant(0, cvalues[0]);
@@ -393,10 +397,10 @@ do_headers()
 		if (i == 4)
 			fprintf(header_file, "\t%s null_0;\n"
 					"\t%s null_1;\n",
-					word_type,
-					word_type);
+					i_word_type,
+					i_word_type);
 		fprintf(header_file, "\t%s %s_%d;\n",
-				word_type,
+				i_word_type,
 				channel_prefix,
 				i);
 	}
@@ -637,8 +641,8 @@ do_ftcode()
 		"\tbuffer_selector = 0;\n"
 		"\t%s = output[GENERATED_FILTER_OUTPUT];\n"
 		"\tfor (i = 0; i <= sample_size - %d; ) {\n",
-		word_type,
-		word_type,
+		o_word_type,
+		o_word_type,
 		output_pointer_name,
 		output_pointer_name,
 		n_samp);
@@ -684,7 +688,7 @@ int main(int argc, char **argv)
 		printf("\tNumber of samples per buffer = %d\n", n_samp);
 	}
 
-	gen_coefficients(cvalues, 0x10000, fofs, fw, wa0, wa1, 1.);
+	gen_coefficients(cvalues, 0x10000, fofs, fw, wa0, wa1, gain);
 	do_headers();
 
 	for (i = 0; i < n_buffers; i++) {
