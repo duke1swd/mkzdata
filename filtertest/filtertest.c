@@ -191,6 +191,11 @@ grok_args(int argc, char **argv)
 	errors++;
 i_found:
 	input_type = i_p->itype;
+	if ((input_type == noise || input_type == file) && fresp_points > 0) {
+		fprintf(stderr, "%s: cannot generate a response curve from file or noise\n",
+				myname);
+		errors++;
+	}
 
 	if (filter_size < 3 || filter_size > FILTER_SIZE_MAX) {
 		fprintf(stderr, "%s: filter size (%d) must be in the range [3-%d]\n",
@@ -320,14 +325,37 @@ i_found:
 		usage();
 }
 
-static void doit();
+static void do_filter_compare();
+static void gen_response_curve();
+static void gen_coefficients(int *coefficients,
+		int scaleone,
+		double foverfs,
+		int N,
+		double windowa0,
+		double windowa1,
+		double gain);
 
 int
 main(int argc, char **argv)
 {
 	myname = *argv;
 	grok_args(argc, argv);
-	doit();
+
+	if (debug)
+		printf("Filter width = %d\n", filter_size);
+
+	// Create the filter coefficients
+	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, GENERATED_GAIN);
+
+	if (fresp_points) {
+		if (verbose)
+			printf("Generating Response Curve\n");
+		gen_response_curve();
+	} else {
+		if (verbose)
+			printf("Comparing Filters\n");
+		do_filter_compare();
+	}
 	return 0;
 }
 
@@ -346,12 +374,12 @@ gen_noise_samples()
 }
 
 static void
-gen_square_samples()
+gen_square_samples(double f)
 {
 }
 
 static void
-gen_sine_samples()
+gen_sine_samples(double f)
 {
 }
 
@@ -672,14 +700,8 @@ compare(int f1, int f2)
  * This is the main execution flow.
  */
 static void
-doit()
+do_filter_compare()
 {
-	if (debug)
-		printf("Filter width = %d\n", filter_size);
-
-	// Create the filter coefficients
-	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, GENERATED_GAIN);
-
 	// Get the input data.
 	switch (input_type) {
 		case file:
@@ -689,10 +711,10 @@ doit()
 			gen_noise_samples();
 			break;
 		case sqwave:
-			gen_square_samples();
+			gen_square_samples(input_frequency);
 			break;
 		case snwave:
-			gen_sine_samples();
+			gen_sine_samples(input_frequency);
 			break;
 	}
 
@@ -707,4 +729,37 @@ doit()
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
 	compare(SIMPLE_FILTER_OUTPUT, GENERATED_FILTER_OUTPUT);
+}
+
+/*
+ * Generate a frequence response curve
+ */
+static void
+gen_response_curve()
+{
+	int i;
+	double freq;
+	double r;
+
+	r = exp(log(fresp_max / fresp_min) / (double)(fresp_points-1));
+
+	if (debug)
+		printf("frequency response points:\n");
+	for (i = 0; i < fresp_points; i++) {
+		freq = fresp_min * pow(r, (double)i);
+		if (debug)
+			printf("\t%d\t%.4f\n", i, freq);
+		switch (input_type) {
+			case sqwave:
+				gen_square_samples(freq);
+				break;
+			case snwave:
+				gen_sine_samples(freq);
+				break;
+			default:
+				fprintf(stderr, "%s: internal error in frequency sweep\n",
+						myname);
+				exit(1);
+		}
+	}
 }
