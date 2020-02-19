@@ -381,6 +381,17 @@ gen_square_samples(double f)
 static void
 gen_sine_samples(double f)
 {
+	int i;
+	double t;
+	double s;
+	double c;
+
+	c = f/adc_frequency * TWOPI;
+	for (i = 0; i < sample_size; i++) {
+		t = i * c;
+		s = sin(t) * 2047. + 2048.;
+		samples[i] = s;
+	}
 }
 
 /*
@@ -720,7 +731,7 @@ do_filter_compare()
 
 	simple_filter();
 	if (filter_size % 4 == 1) {
-		//single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
+		single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
 		single_pass_filter(single_pass_stage_v2, SINGLE_V2_OUTPUT);
 	}
 	if (filter_size == GENERATED_FILTER_SIZE)
@@ -729,6 +740,21 @@ do_filter_compare()
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
 	compare(SIMPLE_FILTER_OUTPUT, GENERATED_FILTER_OUTPUT);
+}
+
+static double 
+rms(int16_t *data, int n)
+{
+	double acc;
+	double v;
+	int i;
+
+	acc = 0;
+	for (i = 0; i < n; i++) {
+		v = (double)data[i] - 2048.;
+		acc += v * v;
+	}
+	return sqrt(acc / (double) n);
 }
 
 /*
@@ -740,15 +766,12 @@ gen_response_curve()
 	int i;
 	double freq;
 	double r;
+	double rms_in, rms_out;
 
 	r = exp(log(fresp_max / fresp_min) / (double)(fresp_points-1));
 
-	if (debug)
-		printf("frequency response points:\n");
 	for (i = 0; i < fresp_points; i++) {
 		freq = fresp_min * pow(r, (double)i);
-		if (debug)
-			printf("\t%d\t%.4f\n", i, freq);
 		switch (input_type) {
 			case sqwave:
 				gen_square_samples(freq);
@@ -761,5 +784,11 @@ gen_response_curve()
 						myname);
 				exit(1);
 		}
+		printf("\t%d\t%6.1f\t", i, freq);
+		rms_in = rms((int16_t *)samples, sample_size);
+		simple_filter();
+		rms_out = rms(output[SIMPLE_FILTER_OUTPUT],
+			(sample_size - filter_size)/2 + 1);
+		printf("%.3f\n", rms_out / rms_in);
 	}
 }
