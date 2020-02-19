@@ -26,6 +26,7 @@
 #define	FILTER_SIZE_MAX	65
 #define	STAGE_FILTER_SIZE (FILTER_SIZE_MAX/2)
 #define	N_OUTPUTS	4
+#define	MAX_RESP_POINTS	1024
 
 #define	SIMPLE_FILTER_OUTPUT	0
 #define	SINGLE_PASS_OUTPUT	1
@@ -49,20 +50,22 @@ int debug;
 char *input_type_name;
 enum input_types_e input_type;
 int input_frequency;
-int adc_frequency;
+double adc_frequency;
 int sample_size;
 char *input_file_name;
 FILE *input_file;
 double fofs;
 double wa0;
 double wa1;
+double fresp_min, fresp_max;
+int fresp_points;
 
 int	cvalues[FILTER_SIZE_MAX];
-int	samples[MAX_SAMPLES];
-int	halfsamp[MAX_SAMPLES/2];
-int	output[N_OUTPUTS][MAX_SAMPLES/4+FILTER_SIZE_MAX];
-int	first_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
-int	second_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
+int16_t	samples[MAX_SAMPLES];
+int16_t	halfsamp[MAX_SAMPLES/2];
+int16_t	output[N_OUTPUTS][MAX_SAMPLES/4+FILTER_SIZE_MAX];
+int16_t	first_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
+int16_t	second_stage_filters[(FILTER_SIZE_MAX-1)/2][STAGE_FILTER_SIZE];
 
 struct input_type_s {
 	enum input_types_e itype;
@@ -81,9 +84,12 @@ static void
 set_defaults()
 {
 	filter_size = GENERATED_FILTER_SIZE;
+	fresp_min = 10.;
+	fresp_max = 15000.;
+	fresp_points = 0;
 	input_type_name = "sqwave";
 	input_frequency = 1000;
-	adc_frequency = 35714;
+	adc_frequency = 35714.;
 	sample_size = 1000000;	// 1M
 	input_type_name = input_types[0].itype_name;
 	fofs = 4.;
@@ -102,7 +108,7 @@ usage()
 	fprintf(stderr, "Usage: %s <options> [<input file>]\n", myname);
 	fprintf(stderr, "Options:\n");
 	fprintf(stderr, "\t-f <filter size (%d)>\n", filter_size);
-	fprintf(stderr, "\t-a <ADC frequency (%d)>\n", adc_frequency);
+	fprintf(stderr, "\t-a <ADC frequency (%f)>\n", adc_frequency);
 	fprintf(stderr, "\t-s <sample size (%d)>\n", sample_size);
 	fprintf(stderr, "\t-t <signal type (");
 	for (i_p = input_types; i_p->itype_name; i_p++) {
@@ -110,6 +116,10 @@ usage()
 			fprintf(stderr, ", ");
 		fprintf(stderr, "%s", i_p->itype_name);
 	}
+	fprintf(stderr, "To generate a response curve set number of points:\n");
+	fprintf(stderr, "\t-n <number of points in curve (%d)\n", fresp_points);
+	fprintf(stderr, "\t-M <minimum frequency in HZ (%.1f)\n", fresp_min);
+	fprintf(stderr, "\t-X <maximum frequency in HZ (%.1f)\n", fresp_max);
 	fprintf(stderr, ")\n");
 	fprintf(stderr, "\t-i <input frequency (%d)>\n", input_frequency);
 	fprintf(stderr, "\t-v (increase verbosity)\n");
@@ -129,13 +139,13 @@ grok_args(int argc, char **argv)
 	errors = 0;
 	input_frequency_set = 0;
 	set_defaults();
-	while ((c = getopt(argc, argv, "f:a:s:t:i:vdh")) != EOF)
+	while ((c = getopt(argc, argv, "n:M:X:f:a:s:t:i:vdh")) != EOF)
 		switch (c) {
 			case 'f':
 				filter_size = atoi(optarg);
 				break;
 			case 'a':
-				adc_frequency = atoi(optarg);
+				adc_frequency = atof(optarg);
 				break;
 			case 's':
 				sample_size = atoi(optarg);
@@ -146,6 +156,15 @@ grok_args(int argc, char **argv)
 			case 'i':
 				input_frequency = atoi(optarg);
 				input_frequency_set++;
+				break;
+			case 'n':
+				fresp_points = atoi(optarg);
+				break;
+			case 'M':
+				fresp_min = atof(optarg);
+				break;
+			case 'X':
+				fresp_max = atof(optarg);
 				break;
 			case 'v':
 				verbose++;
@@ -197,7 +216,7 @@ i_found:
 	}
 
 	if (adc_frequency < 1) {
-		fprintf(stderr, "%s: adc frequency (%d) must be positive\n",
+		fprintf(stderr, "%s: adc frequency (%f) must be positive\n",
 				myname,
 				adc_frequency);
 		errors++;
@@ -211,7 +230,7 @@ i_found:
 	}
 
 	if (adc_frequency < input_frequency) {
-		fprintf(stderr, "%s: adc frequency (%d) should not be "
+		fprintf(stderr, "%s: adc frequency (%f) should not be "
 				"smaller than input_frequency (%d)\n",
 				myname,
 				adc_frequency,
@@ -224,6 +243,34 @@ i_found:
 				myname,
 				sample_size,
 				MAX_SAMPLES);
+		errors++;
+	}
+
+	if (fresp_points < 0 || fresp_points >= MAX_RESP_POINTS) {
+		fprintf(stderr, "%s: number of response points (%d) must be "
+				"in the range [0-%d]\n",
+				myname,
+				fresp_points,
+				MAX_RESP_POINTS);
+		errors++;
+	}
+
+	if (fresp_min < 1. || fresp_min >= adc_frequency/4.) {
+		fprintf(stderr, "%s: frequency response minimum (%f) must be in the "
+				"range [1. - adc_frequency/4 (%f)]\n",
+				myname,
+				fresp_min,
+				adc_frequency/4.);
+		errors++;
+	}
+
+	if (fresp_max <= fresp_min || fresp_max >= adc_frequency/2.) {
+		fprintf(stderr, "%s: frequency response maximum (%f) must be in the "
+				"range [min resp freq (%f) - adc_frequency/2 (%f)]\n",
+				myname,
+				fresp_max,
+				fresp_min,
+				adc_frequency/2.);
 		errors++;
 	}
 
@@ -359,7 +406,7 @@ static void gen_coefficients(int *coefficients,
  * Simple filter with 2x down-sample
  */
 static void
-simple2x(int *input, int *output, int n)
+simple2x(int16_t *input, int16_t *output, int n)
 {
 	int i, j;
 	int hw;
@@ -390,9 +437,9 @@ simple_filter()
 }
 
 static int
-single_pass_stage(int filters[][STAGE_FILTER_SIZE],
+single_pass_stage(int16_t filters[][STAGE_FILTER_SIZE],
 	       	int index,
-		int sample)
+		int16_t sample)
 {
 	int i, f;
 	int output;
@@ -443,9 +490,9 @@ single_pass_stage(int filters[][STAGE_FILTER_SIZE],
 }
 
 static int
-single_pass_stage_v2(int filters[][STAGE_FILTER_SIZE],
+single_pass_stage_v2(int16_t filters[][STAGE_FILTER_SIZE],
 	       	int index,
-		int sample)
+		int16_t sample)
 {
 	int i, f;
 	int output;
@@ -503,11 +550,11 @@ single_pass_stage_v2(int filters[][STAGE_FILTER_SIZE],
 }
 
 static void
-single_pass_filter(int (*stage)(int f[][STAGE_FILTER_SIZE], int i, int s), int f_n)
+single_pass_filter(int (*stage)(int16_t f[][STAGE_FILTER_SIZE], int i, int16_t s), int f_n)
 {
 	int i;
 	int val;
-	int *o_p;
+	int16_t *o_p;
 
 	if (verbose) {
 		printf("Running single pass filter\n");
