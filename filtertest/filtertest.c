@@ -45,6 +45,7 @@ char *filter_names[] = {
 };
 
 enum input_types_e { noise, sqwave, snwave, file };
+enum analog_filter_types_e { none, butterworth, bessel };
 
 char *myname;
 int filter_size;
@@ -62,6 +63,7 @@ double wa0;
 double wa1;
 double fresp_min, fresp_max;
 int fresp_points;
+enum analog_filter_types_e analog_type;
 
 int		cvalues[FILTER_SIZE_MAX];
 uint16_t	samples[MAX_SAMPLES];
@@ -78,6 +80,18 @@ struct input_type_s {
 	{ sqwave, "sqwave"},
 	{ snwave, "snwave"},
 	{ file, "file"},
+	{ 0, (char *)0 },
+};
+
+struct analog_filter_type_s {
+	enum analog_filter_types_e atype;
+	char *atype_name;
+} analog_types[] = {
+	{ none, "none" },
+	{ butterworth, "Butterworth" },
+	{ butterworth, "butter" },
+	{ bessel, "Bessel" },
+	{ bessel, "bessel" },
 	{ 0, (char *)0 },
 };
 
@@ -98,6 +112,7 @@ set_defaults()
 	fofs = 4.;
 	wa0 = 0.5;
 	wa1 = 0.5;
+	analog_type = none;
 	verbose = 0;
 	debug = 0;
 }
@@ -106,6 +121,7 @@ static void
 usage()
 {
 	struct input_type_s *i_p;
+	struct analog_filter_type_s *a_p;
 
 	set_defaults();
 	fprintf(stderr, "Usage: %s <options> [<input file>]\n", myname);
@@ -119,11 +135,18 @@ usage()
 			fprintf(stderr, ", ");
 		fprintf(stderr, "%s", i_p->itype_name);
 	}
+	fprintf(stderr, ")>\n");
 	fprintf(stderr, "To generate a response curve set number of points:\n");
 	fprintf(stderr, "\t-n <number of points in curve (%d)\n", fresp_points);
 	fprintf(stderr, "\t-M <minimum frequency in HZ (%.1f)\n", fresp_min);
 	fprintf(stderr, "\t-X <maximum frequency in HZ (%.1f)\n", fresp_max);
-	fprintf(stderr, ")\n");
+	fprintf(stderr, "\t-A <anlog filter type (");
+	for (a_p = analog_types; a_p->atype_name; a_p++) {
+		if (a_p != analog_types)
+			fprintf(stderr, ", ");
+		fprintf(stderr, "%s", a_p->atype_name);
+	}
+	fprintf(stderr, ")>\n");
 	fprintf(stderr, "\t-i <input frequency (%d)>\n", input_frequency);
 	fprintf(stderr, "\t-v (increase verbosity)\n");
 	fprintf(stderr, "\t-d (increase debugging)\n");
