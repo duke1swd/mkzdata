@@ -272,6 +272,7 @@ i_found:
 		errors++;
 	}
 
+#if 0
 	if (fresp_max <= fresp_min || fresp_max >= adc_frequency/2.) {
 		fprintf(stderr, "%s: frequency response maximum (%f) must be in the "
 				"range [min resp freq (%f) - adc_frequency/2 (%f)]\n",
@@ -281,6 +282,7 @@ i_found:
 				adc_frequency/2.);
 		errors++;
 	}
+#endif
 
 	if (GENERATED_CHANNELS != 1) {
 		fprintf(stderr, "%s: generated channels (%d) must be set to 1 in gen22.c\n",
@@ -746,12 +748,18 @@ static double
 rms(int16_t *data, int n)
 {
 	double acc;
+	double ave;
 	double v;
 	int i;
 
 	acc = 0;
+	for (i = 0; i < n; i++)
+		acc += (double)data[i];
+	ave = acc / (double)n;
+
+	acc = 0;
 	for (i = 0; i < n; i++) {
-		v = (double)data[i] - 2048.;
+		v = (double)data[i] - ave;
 		acc += v * v;
 	}
 	return sqrt(acc / (double) n);
@@ -767,6 +775,10 @@ gen_response_curve()
 	double freq;
 	double r;
 	double rms_in, rms_out;
+	int outputs;
+
+	outputs = (sample_size - filter_size)/2 + 1;
+	outputs = (outputs - filter_size)/2 + 1;
 
 	r = exp(log(fresp_max / fresp_min) / (double)(fresp_points-1));
 
@@ -787,8 +799,7 @@ gen_response_curve()
 		printf("\t%d\t%6.1f\t", i, freq);
 		rms_in = rms((int16_t *)samples, sample_size);
 		simple_filter();
-		rms_out = rms(output[SIMPLE_FILTER_OUTPUT],
-			(sample_size - filter_size)/2 + 1);
+		rms_out = rms(output[SIMPLE_FILTER_OUTPUT], outputs);
 		printf("%.3f\n", rms_out / rms_in);
 	}
 }
