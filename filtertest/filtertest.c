@@ -53,7 +53,7 @@ int verbose;
 int debug;
 char *input_type_name;
 enum input_types_e input_type;
-int input_frequency;
+double input_frequency;
 double adc_frequency;
 int sample_size;
 char *input_file_name;
@@ -63,7 +63,9 @@ double wa0;
 double wa1;
 double fresp_min, fresp_max;
 int fresp_points;
+char *analog_type_name;
 enum analog_filter_types_e analog_type;
+double cutoff_frequency;
 
 int		cvalues[FILTER_SIZE_MAX];
 uint16_t	samples[MAX_SAMPLES];
@@ -104,15 +106,15 @@ set_defaults()
 	fresp_min = 10.;
 	fresp_max = 15000.;
 	fresp_points = 0;
-	input_type_name = "sqwave";
-	input_frequency = 1000;
+	input_frequency = 1000.;
 	adc_frequency = 35714.;
 	sample_size = 1000000;	// 1M
 	input_type_name = input_types[0].itype_name;
 	fofs = 4.;
 	wa0 = 0.5;
 	wa1 = 0.5;
-	analog_type = none;
+	analog_type_name = analog_types[0].atype_name;
+	cutoff_frequency = 1000.;
 	verbose = 0;
 	debug = 0;
 }
@@ -147,7 +149,8 @@ usage()
 		fprintf(stderr, "%s", a_p->atype_name);
 	}
 	fprintf(stderr, ")>\n");
-	fprintf(stderr, "\t-i <input frequency (%d)>\n", input_frequency);
+	fprintf(stderr, "\t-i <input frequency (%f)>\n", input_frequency);
+	fprintf(stderr, "\t-c <analog filter cutoff frequency (%f)\n", cutoff_frequency);
 	fprintf(stderr, "\t-v (increase verbosity)\n");
 	fprintf(stderr, "\t-d (increase debugging)\n");
 	exit(1);
@@ -160,13 +163,23 @@ grok_args(int argc, char **argv)
 	int errors;
 	int nargs;
 	int input_frequency_set;
+	int cutoff_frequency_set;
 	struct input_type_s *i_p;
+	struct analog_filter_type_s *a_p;
 
 	errors = 0;
 	input_frequency_set = 0;
+	cutoff_frequency_set = 0;
 	set_defaults();
-	while ((c = getopt(argc, argv, "n:M:X:f:a:s:t:i:vdh")) != EOF)
+	while ((c = getopt(argc, argv, "c:A:n:M:X:f:a:s:t:i:vdh")) != EOF)
 		switch (c) {
+			case 'c':
+				cutoff_frequency = atof(optarg);
+				cutoff_frequency_set++;
+				break;
+			case 'A':
+				analog_type_name = optarg;
+				break;
 			case 'f':
 				filter_size = atoi(optarg);
 				break;
@@ -180,7 +193,7 @@ grok_args(int argc, char **argv)
 				input_type_name = optarg;
 				break;
 			case 'i':
-				input_frequency = atoi(optarg);
+				input_frequency = atof(optarg);
 				input_frequency_set++;
 				break;
 			case 'n':
@@ -214,6 +227,23 @@ grok_args(int argc, char **argv)
 	errors++;
 i_found:
 	input_type = i_p->itype;
+
+	for (a_p = analog_types; a_p->atype_name; a_p++)
+		if (strcmp(analog_type_name, a_p->atype_name) == 0)
+			goto a_found;
+	fprintf(stderr, "%s: analog filter type (%s) is not understood\n",
+			myname,
+			analog_type_name);
+	errors++;
+a_found:
+	analog_type = a_p->atype;
+
+	if (cutoff_frequency_set && (fresp_points == 0 || analog_type == none)) 
+		fprintf(stderr, "%s: cutoff frequency (%f) ignored, no analog "
+				"filter set\n",
+				myname,
+				cutoff_frequency);
+
 	if ((input_type == noise || input_type == file) && fresp_points > 0) {
 		fprintf(stderr, "%s: cannot generate a response curve from file or noise\n",
 				myname);
@@ -253,8 +283,8 @@ i_found:
 		errors++;
 	}
 
-	if (input_frequency < 1) {
-		fprintf(stderr, "%s: input frequency (%d) must be positive\n",
+	if (input_frequency < 1.) {
+		fprintf(stderr, "%s: input frequency (%f) must be positive\n",
 				myname,
 				input_frequency);
 		errors++;
@@ -262,7 +292,7 @@ i_found:
 
 	if (adc_frequency < input_frequency) {
 		fprintf(stderr, "%s: adc frequency (%f) should not be "
-				"smaller than input_frequency (%d)\n",
+				"smaller than input_frequency (%f)\n",
 				myname,
 				adc_frequency,
 				input_frequency);
@@ -342,7 +372,7 @@ i_found:
 		input_file_name = "";
 
 	if (input_frequency_set && input_type == file)
-		fprintf(stderr, "%s: Warning: input frequency (%d) ignore for input type \"file\"\n",
+		fprintf(stderr, "%s: Warning: input frequency (%f) ignore for input type \"file\"\n",
 				myname,
 				input_frequency);
 
@@ -382,6 +412,33 @@ main(int argc, char **argv)
 		do_filter_compare();
 	}
 	return 0;
+}
+
+/*
+ *  Analog filter
+ */
+static double
+analog_gain(double f)
+{
+	double x, x6;
+
+	x = f / cutoff_frequency;
+	x6 = x * x * x * x * x * x;
+
+	switch (analog_type) {
+		case none:
+			return 1.;
+		case butterworth:
+			// 3rd-order Butterworth with -3dB point at cutoff frequency
+			return 1. / sqrt(1. + x6);
+		case bessel:
+			// 3rd-order Bessel
+			return 15. / sqrt(x6 + 6. * x * x * x * x + 45. * x * x + 255.);
+		default:
+			fprintf(stderr, "%s: internal error analog filter type\n",
+					myname);
+			exit(1);
+	}
 }
 
 static void
@@ -767,6 +824,18 @@ do_filter_compare()
 	compare(SIMPLE_FILTER_OUTPUT, GENERATED_FILTER_OUTPUT);
 }
 
+static void
+apply_gain(double f, int16_t *data, int n)
+{
+	int i;
+	double ag;
+
+	ag = analog_gain(f);
+
+	for (i = 0; i < n; i++)
+		data[i] = (int16_t)((double)((int)data[i] - 2048) * ag + 2048.);
+}
+
 static double 
 rms(int16_t *data, int n)
 {
@@ -821,6 +890,7 @@ gen_response_curve()
 		}
 		printf("\t%d\t%6.1f\t", i, freq);
 		rms_in = rms((int16_t *)samples, sample_size);
+		apply_gain(freq, (int16_t *)samples, sample_size);
 		simple_filter();
 		rms_out = rms(output[SIMPLE_FILTER_OUTPUT], outputs);
 		printf("%.3f\n", rms_out / rms_in);
