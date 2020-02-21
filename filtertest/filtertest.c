@@ -893,6 +893,6 @@ gen_response_curve()
 		apply_gain(freq, (int16_t *)samples, sample_size);
 		simple_filter();
 		rms_out = rms(output[SIMPLE_FILTER_OUTPUT], outputs);
-		printf("%.3f\n", rms_out / rms_in);
+		printf("%.5f\n", rms_out / rms_in / (double)(GENERATED_GAIN * GENERATED_GAIN));
 	}
 }
