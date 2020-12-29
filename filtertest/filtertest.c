@@ -29,6 +29,7 @@ typedef unsigned short uint16_t;
 #define	FILTER_SIZE_MAX	65
 #define	STAGE_FILTER_SIZE (FILTER_SIZE_MAX/2)
 #define	N_OUTPUTS	4
+#define	MAX_RESP_POINTS	1024
 
 #define	SIMPLE_FILTER_OUTPUT	0
 #define	SINGLE_PASS_OUTPUT	1
@@ -44,6 +45,7 @@ char *filter_names[] = {
 };
 
 enum input_types_e { noise, sqwave, snwave, file };
+enum analog_filter_types_e { none, butterworth, bessel };
 
 char *myname;
 int filter_size;
@@ -51,14 +53,19 @@ int verbose;
 int debug;
 char *input_type_name;
 enum input_types_e input_type;
-int input_frequency;
-int adc_frequency;
+double input_frequency;
+double adc_frequency;
 int sample_size;
 char *input_file_name;
 FILE *input_file;
 double fofs;
 double wa0;
 double wa1;
+double fresp_min, fresp_max;
+int fresp_points;
+char *analog_type_name;
+enum analog_filter_types_e analog_type;
+double cutoff_frequency;
 
 int		cvalues[FILTER_SIZE_MAX];
 uint16_t	samples[MAX_SAMPLES];
@@ -78,20 +85,36 @@ struct input_type_s {
 	{ 0, (char *)0 },
 };
 
+struct analog_filter_type_s {
+	enum analog_filter_types_e atype;
+	char *atype_name;
+} analog_types[] = {
+	{ none, "none" },
+	{ butterworth, "Butterworth" },
+	{ butterworth, "butter" },
+	{ bessel, "Bessel" },
+	{ bessel, "bessel" },
+	{ 0, (char *)0 },
+};
+
 #include "filter_defines.h"
 
 static void
 set_defaults()
 {
 	filter_size = GENERATED_FILTER_SIZE;
-	input_type_name = "sqwave";
-	input_frequency = 1000;
-	adc_frequency = 35714;
+	fresp_min = 10.;
+	fresp_max = 15000.;
+	fresp_points = 0;
+	input_frequency = 1000.;
+	adc_frequency = 35714.;
 	sample_size = 1000000;	// 1M
 	input_type_name = input_types[0].itype_name;
 	fofs = 4.;
 	wa0 = 0.5;
 	wa1 = 0.5;
+	analog_type_name = analog_types[0].atype_name;
+	cutoff_frequency = 1000.;
 	verbose = 0;
 	debug = 0;
 }
@@ -100,12 +123,13 @@ static void
 usage()
 {
 	struct input_type_s *i_p;
+	struct analog_filter_type_s *a_p;
 
 	set_defaults();
 	fprintf(stderr, "Usage: %s <options> [<input file>]\n", myname);
 	fprintf(stderr, "Options:\n");
 	fprintf(stderr, "\t-f <filter size (%d)>\n", filter_size);
-	fprintf(stderr, "\t-a <ADC frequency (%d)>\n", adc_frequency);
+	fprintf(stderr, "\t-a <ADC frequency (%f)>\n", adc_frequency);
 	fprintf(stderr, "\t-s <sample size (%d)>\n", sample_size);
 	fprintf(stderr, "\t-t <signal type (");
 	for (i_p = input_types; i_p->itype_name; i_p++) {
@@ -113,8 +137,20 @@ usage()
 			fprintf(stderr, ", ");
 		fprintf(stderr, "%s", i_p->itype_name);
 	}
-	fprintf(stderr, ")\n");
-	fprintf(stderr, "\t-i <input frequency (%d)>\n", input_frequency);
+	fprintf(stderr, ")>\n");
+	fprintf(stderr, "To generate a response curve set number of points:\n");
+	fprintf(stderr, "\t-n <number of points in curve (%d)\n", fresp_points);
+	fprintf(stderr, "\t-M <minimum frequency in HZ (%.1f)\n", fresp_min);
+	fprintf(stderr, "\t-X <maximum frequency in HZ (%.1f)\n", fresp_max);
+	fprintf(stderr, "\t-A <anlog filter type (");
+	for (a_p = analog_types; a_p->atype_name; a_p++) {
+		if (a_p != analog_types)
+			fprintf(stderr, ", ");
+		fprintf(stderr, "%s", a_p->atype_name);
+	}
+	fprintf(stderr, ")>\n");
+	fprintf(stderr, "\t-i <input frequency (%f)>\n", input_frequency);
+	fprintf(stderr, "\t-c <analog filter cutoff frequency (%f)\n", cutoff_frequency);
 	fprintf(stderr, "\t-v (increase verbosity)\n");
 	fprintf(stderr, "\t-d (increase debugging)\n");
 	exit(1);
@@ -127,18 +163,28 @@ grok_args(int argc, char **argv)
 	int errors;
 	int nargs;
 	int input_frequency_set;
+	int cutoff_frequency_set;
 	struct input_type_s *i_p;
+	struct analog_filter_type_s *a_p;
 
 	errors = 0;
 	input_frequency_set = 0;
+	cutoff_frequency_set = 0;
 	set_defaults();
-	while ((c = getopt(argc, argv, "f:a:s:t:i:vdh")) != EOF)
+	while ((c = getopt(argc, argv, "c:A:n:M:X:f:a:s:t:i:vdh")) != EOF)
 		switch (c) {
+			case 'c':
+				cutoff_frequency = atof(optarg);
+				cutoff_frequency_set++;
+				break;
+			case 'A':
+				analog_type_name = optarg;
+				break;
 			case 'f':
 				filter_size = atoi(optarg);
 				break;
 			case 'a':
-				adc_frequency = atoi(optarg);
+				adc_frequency = atof(optarg);
 				break;
 			case 's':
 				sample_size = atoi(optarg);
@@ -147,8 +193,17 @@ grok_args(int argc, char **argv)
 				input_type_name = optarg;
 				break;
 			case 'i':
-				input_frequency = atoi(optarg);
+				input_frequency = atof(optarg);
 				input_frequency_set++;
+				break;
+			case 'n':
+				fresp_points = atoi(optarg);
+				break;
+			case 'M':
+				fresp_min = atof(optarg);
+				break;
+			case 'X':
+				fresp_max = atof(optarg);
 				break;
 			case 'v':
 				verbose++;
@@ -172,6 +227,28 @@ grok_args(int argc, char **argv)
 	errors++;
 i_found:
 	input_type = i_p->itype;
+
+	for (a_p = analog_types; a_p->atype_name; a_p++)
+		if (strcmp(analog_type_name, a_p->atype_name) == 0)
+			goto a_found;
+	fprintf(stderr, "%s: analog filter type (%s) is not understood\n",
+			myname,
+			analog_type_name);
+	errors++;
+a_found:
+	analog_type = a_p->atype;
+
+	if (cutoff_frequency_set && (fresp_points == 0 || analog_type == none)) 
+		fprintf(stderr, "%s: cutoff frequency (%f) ignored, no analog "
+				"filter set\n",
+				myname,
+				cutoff_frequency);
+
+	if ((input_type == noise || input_type == file) && fresp_points > 0) {
+		fprintf(stderr, "%s: cannot generate a response curve from file or noise\n",
+				myname);
+		errors++;
+	}
 
 	if (filter_size < 3 || filter_size > FILTER_SIZE_MAX) {
 		fprintf(stderr, "%s: filter size (%d) must be in the range [3-%d]\n",
@@ -200,22 +277,22 @@ i_found:
 	}
 
 	if (adc_frequency < 1) {
-		fprintf(stderr, "%s: adc frequency (%d) must be positive\n",
+		fprintf(stderr, "%s: adc frequency (%f) must be positive\n",
 				myname,
 				adc_frequency);
 		errors++;
 	}
 
-	if (input_frequency < 1) {
-		fprintf(stderr, "%s: input frequency (%d) must be positive\n",
+	if (input_frequency < 1.) {
+		fprintf(stderr, "%s: input frequency (%f) must be positive\n",
 				myname,
 				input_frequency);
 		errors++;
 	}
 
 	if (adc_frequency < input_frequency) {
-		fprintf(stderr, "%s: adc frequency (%d) should not be "
-				"smaller than input_frequency (%d)\n",
+		fprintf(stderr, "%s: adc frequency (%f) should not be "
+				"smaller than input_frequency (%f)\n",
 				myname,
 				adc_frequency,
 				input_frequency);
@@ -229,6 +306,36 @@ i_found:
 				MAX_SAMPLES);
 		errors++;
 	}
+
+	if (fresp_points < 0 || fresp_points >= MAX_RESP_POINTS) {
+		fprintf(stderr, "%s: number of response points (%d) must be "
+				"in the range [0-%d]\n",
+				myname,
+				fresp_points,
+				MAX_RESP_POINTS);
+		errors++;
+	}
+
+	if (fresp_min < 1. || fresp_min >= adc_frequency/4.) {
+		fprintf(stderr, "%s: frequency response minimum (%f) must be in the "
+				"range [1. - adc_frequency/4 (%f)]\n",
+				myname,
+				fresp_min,
+				adc_frequency/4.);
+		errors++;
+	}
+
+#if 0
+	if (fresp_max <= fresp_min || fresp_max >= adc_frequency/2.) {
+		fprintf(stderr, "%s: frequency response maximum (%f) must be in the "
+				"range [min resp freq (%f) - adc_frequency/2 (%f)]\n",
+				myname,
+				fresp_max,
+				fresp_min,
+				adc_frequency/2.);
+		errors++;
+	}
+#endif
 
 	if (GENERATED_CHANNELS != 1) {
 		fprintf(stderr, "%s: generated channels (%d) must be set to 1 in gen22.c\n",
@@ -265,7 +372,7 @@ i_found:
 		input_file_name = "";
 
 	if (input_frequency_set && input_type == file)
-		fprintf(stderr, "%s: Warning: input frequency (%d) ignore for input type \"file\"\n",
+		fprintf(stderr, "%s: Warning: input frequency (%f) ignore for input type \"file\"\n",
 				myname,
 				input_frequency);
 
@@ -273,15 +380,65 @@ i_found:
 		usage();
 }
 
-static void doit();
+static void do_filter_compare();
+static void gen_response_curve();
+static void gen_coefficients(int *coefficients,
+		int scaleone,
+		double foverfs,
+		int N,
+		double windowa0,
+		double windowa1,
+		double gain);
 
 int
 main(int argc, char **argv)
 {
 	myname = *argv;
 	grok_args(argc, argv);
-	doit();
+
+	if (debug)
+		printf("Filter width = %d\n", filter_size);
+
+	// Create the filter coefficients
+	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, GENERATED_GAIN);
+
+	if (fresp_points) {
+		if (verbose)
+			printf("Generating Response Curve\n");
+		gen_response_curve();
+	} else {
+		if (verbose)
+			printf("Comparing Filters\n");
+		do_filter_compare();
+	}
 	return 0;
+}
+
+/*
+ *  Analog filter
+ */
+static double
+analog_gain(double f)
+{
+	double x, x6;
+
+	x = f / cutoff_frequency;
+	x6 = x * x * x * x * x * x;
+
+	switch (analog_type) {
+		case none:
+			return 1.;
+		case butterworth:
+			// 3rd-order Butterworth with -3dB point at cutoff frequency
+			return 1. / sqrt(1. + x6);
+		case bessel:
+			// 3rd-order Bessel
+			return 15. / sqrt(x6 + 6. * x * x * x * x + 45. * x * x + 255.);
+		default:
+			fprintf(stderr, "%s: internal error analog filter type\n",
+					myname);
+			exit(1);
+	}
 }
 
 static void
@@ -299,13 +456,24 @@ gen_noise_samples()
 }
 
 static void
-gen_square_samples()
+gen_square_samples(double f)
 {
 }
 
 static void
-gen_sine_samples()
+gen_sine_samples(double f)
 {
+	int i;
+	double t;
+	double s;
+	double c;
+
+	c = f/adc_frequency * TWOPI;
+	for (i = 0; i < sample_size; i++) {
+		t = i * c;
+		s = sin(t) * 2047. + 2048.;
+		samples[i] = s;
+	}
 }
 
 /*
@@ -418,7 +586,7 @@ simple_filter()
 static int
 single_pass_stage(int16_t filters[][STAGE_FILTER_SIZE],
 	       	int index,
-		int sample)
+		int16_t sample)
 {
 	int i, f;
 	int output;
@@ -471,7 +639,7 @@ single_pass_stage(int16_t filters[][STAGE_FILTER_SIZE],
 static int
 single_pass_stage_v2(int16_t filters[][STAGE_FILTER_SIZE],
 	       	int index,
-		int sample)
+		int16_t sample)
 {
 	int i, f;
 	int output;
@@ -529,7 +697,7 @@ single_pass_stage_v2(int16_t filters[][STAGE_FILTER_SIZE],
 }
 
 static void
-single_pass_filter(int (*stage)(int16_t f[][STAGE_FILTER_SIZE], int i, int s), int f_n)
+single_pass_filter(int (*stage)(int16_t f[][STAGE_FILTER_SIZE], int i, int16_t s), int f_n)
 {
 	int i;
 	int val;
@@ -627,14 +795,8 @@ compare(int f1, int f2)
  * This is the main execution flow.
  */
 static void
-doit()
+do_filter_compare()
 {
-	if (debug)
-		printf("Filter width = %d\n", filter_size);
-
-	// Create the filter coefficients
-	gen_coefficients(cvalues, 0x10000, fofs, filter_size, wa0, wa1, GENERATED_GAIN);
-
 	// Get the input data.
 	switch (input_type) {
 		case file:
@@ -644,16 +806,16 @@ doit()
 			gen_noise_samples();
 			break;
 		case sqwave:
-			gen_square_samples();
+			gen_square_samples(input_frequency);
 			break;
 		case snwave:
-			gen_sine_samples();
+			gen_sine_samples(input_frequency);
 			break;
 	}
 
 	simple_filter();
 	if (filter_size % 4 == 1) {
-		//single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
+		single_pass_filter(single_pass_stage, SINGLE_PASS_OUTPUT);
 		single_pass_filter(single_pass_stage_v2, SINGLE_V2_OUTPUT);
 	}
 	if (filter_size == GENERATED_FILTER_SIZE)
@@ -662,4 +824,77 @@ doit()
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_PASS_OUTPUT);
 	//compare(SIMPLE_FILTER_OUTPUT, SINGLE_V2_OUTPUT);
 	compare(SIMPLE_FILTER_OUTPUT, GENERATED_FILTER_OUTPUT);
+}
+
+static void
+apply_gain(double f, int16_t *data, int n)
+{
+	int i;
+	double ag;
+
+	ag = analog_gain(f);
+
+	for (i = 0; i < n; i++)
+		data[i] = (int16_t)((double)((int)data[i] - 2048) * ag + 2048.);
+}
+
+static double 
+rms(int16_t *data, int n)
+{
+	double acc;
+	double ave;
+	double v;
+	int i;
+
+	acc = 0;
+	for (i = 0; i < n; i++)
+		acc += (double)data[i];
+	ave = acc / (double)n;
+
+	acc = 0;
+	for (i = 0; i < n; i++) {
+		v = (double)data[i] - ave;
+		acc += v * v;
+	}
+	return sqrt(acc / (double) n);
+}
+
+/*
+ * Generate a frequence response curve
+ */
+static void
+gen_response_curve()
+{
+	int i;
+	double freq;
+	double r;
+	double rms_in, rms_out;
+	int outputs;
+
+	outputs = (sample_size - filter_size)/2 + 1;
+	outputs = (outputs - filter_size)/2 + 1;
+
+	r = exp(log(fresp_max / fresp_min) / (double)(fresp_points-1));
+
+	for (i = 0; i < fresp_points; i++) {
+		freq = fresp_min * pow(r, (double)i);
+		switch (input_type) {
+			case sqwave:
+				gen_square_samples(freq);
+				break;
+			case snwave:
+				gen_sine_samples(freq);
+				break;
+			default:
+				fprintf(stderr, "%s: internal error in frequency sweep\n",
+						myname);
+				exit(1);
+		}
+		printf("\t%d\t%6.1f\t", i, freq);
+		rms_in = rms((int16_t *)samples, sample_size);
+		apply_gain(freq, (int16_t *)samples, sample_size);
+		simple_filter();
+		rms_out = rms(output[SIMPLE_FILTER_OUTPUT], outputs);
+		printf("%.5f\n", rms_out / rms_in / (double)(GENERATED_GAIN * GENERATED_GAIN));
+	}
 }
