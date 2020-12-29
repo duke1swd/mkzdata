@@ -583,6 +583,8 @@ compare(int f1, int f2)
 	int outputs;
 	int sum1, sum2;
 
+	printf("sample_size = %d\n", sample_size);//XXX
+	printf("filter_size = %d\n", filter_size);//XXX
 	outputs = (sample_size - filter_size)/2 + 1;
 	outputs = (outputs - filter_size)/2 + 1;
 	printf("Comparing filters %s and %s on %d samples\n",
